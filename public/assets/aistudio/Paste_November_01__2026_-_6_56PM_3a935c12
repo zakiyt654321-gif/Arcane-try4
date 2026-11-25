@@ -1,0 +1,2159 @@
+# **ARCANE ROYALE — NEXT-GENERATION BOT AI OVERHAUL**
+## *Comprehensive Engineering Prompt for Gemini AI Studio*
+### **Version 1.0 — Mobile-First, Skill-Adaptive, Fairness-Guaranteed AI**
+
+---
+
+# 📋 **TABLE OF CONTENTS**
+
+1. Role Assignment & Mission Statement
+2. Absolute Constraints (Non-Negotiable Rules)
+3. Current System Audit
+4. The "100x Better" Definition
+5. The Fairness Doctrine
+6. The Skill-Adaptive Difficulty Engine
+7. Bot AI Architecture Overview
+8. Perception System Redesign
+9. Decision-Making System (Utility AI)
+10. Combat AI Deep Dive
+11. Movement & Pathfinding AI
+12. Strategic & Tactical AI
+13. Advanced Behavioral Systems
+14. Bot Cooperation & Social AI
+15. Fairness Layer (Anti-Frustration Systems)
+16. Mobile Performance Optimization Layer
+17. Code Structure, Classes & Interfaces
+18. Difficulty Tier Tables (Exact Numbers)
+19. Testing & Tuning Protocols
+20. Implementation Checklist
+21. What to Keep vs. Replace
+22. Final Deliverables & Acceptance Criteria
+
+---
+
+# 1. ROLE ASSIGNMENT & MISSION STATEMENT
+
+You are a **Senior Gameplay AI Engineer** with 15+ years of experience shipping mobile battle royale titles at scale (PUBG Mobile, Free Fire, Call of Duty Mobile tier). You specialize in:
+
+- **Behavior-tree and utility-based AI** for shooters and brawlers
+- **Skill-adaptive difficulty systems** that feel fair to players
+- **60fps mobile performance engineering** on low-end devices (2GB RAM, Snapdragon 4xx/Mali-G5x class GPUs)
+- **Anti-frustration design** — the art of making bots feel competent without feeling unfair
+
+Your mission: **completely replace the existing bot AI** in `arcane_royale.html` with a **next-generation AI system** that is approximately **100x more sophisticated** than the current implementation — while being **completely fair** and **performance-safe on low-end mobile devices**.
+
+The player should feel that bots are **"good at the game"** — not that they are **"cheating"**. The player should lose sometimes, and that loss should feel **earned by the bots**, not stolen by the code. The player should never feel "the game is out to get me."
+
+---
+
+# 2. ABSOLUTE CONSTRAINTS (NON-NEGOTIABLE RULES)
+
+These rules override every other consideration. If a design decision conflicts with these, abandon the design decision.
+
+## 2.1 Performance Constraints
+
+| Constraint | Target | Hard Limit |
+|---|---|---|
+| Frame rate (low-end mobile) | 45 FPS | 30 FPS minimum before frame drop |
+| Frame rate (mid-end mobile) | 60 FPS | 55 FPS minimum |
+| AI CPU budget per frame | 4ms | 8ms absolute ceiling |
+| AI CPU budget total | 25% of frame time | 40% absolute ceiling |
+| Per-bot update frequency | 5 Hz (low-skill, far) | 15 Hz (high-skill, close) |
+| Total memory for AI | 2 MB | 4 MB absolute ceiling |
+| GC pressure from AI | < 1 allocation/frame | < 5 allocations/frame |
+
+**Anti-pattern rules:**
+- ❌ **NO** `Array.prototype.filter/map/reduce` in per-frame AI code (allocation-heavy)
+- ❌ **NO** object literals `{}` inside the AI hot loop (use pooled objects)
+- ❌ **NO** `Math.hypot` inside nested loops (use squared distance comparison)
+- ❌ **NO** `setTimeout` / `setInterval` for AI tick scheduling (use accumulator in game loop)
+- ❌ **NO** string concatenation in the update loop (allocation)
+- ❌ **NO** `Array.prototype.includes` on large arrays (use Set or bitmask)
+- ❌ **NO** any `try/catch` inside hot paths (deoptimizes V8)
+- ❌ **NO** closure creation per frame (hoist functions)
+
+## 2.2 Fairness Constraints (The Anti-Frustration Constitution)
+
+These are **hard-coded behavioral rules** — bots must NEVER violate them:
+
+1. **No aimbot**: Bots must always apply aim error. Even PRO-tier bots have ≥ 3° of intentional aim scatter.
+2. **No wallhacks**: Bots may only react to enemies they have "line of sight" to (using simple raycast or distance+angle check). Exception: if enemy fired a loud weapon within 400px in the last 0.5s, bots may "hear" them.
+3. **No instant reaction**: Minimum reaction time is **220ms** for lowest tier bots, **110ms** for highest tier. Reaction time includes: detect → decide → act.
+4. **No perfect prediction**: Bots predict player movement with **intentional velocity error** (see §15.3).
+5. **No damage stacking**: If the player has been hit 3+ times in the last 2 seconds, bots deal 20% reduced damage to the player for the next 1 second (anti-gangbang).
+6. **No focus-fire**: Bots must randomize targets. When 3+ bots are within 400px of the player and no other enemy is present, at most 2 bots may target the player at once. The 3rd bot must "distract" (attack a different target or reposition).
+7. **Rubber-band for losers**: When player is losing badly (see §6.3), bot aggression AND accuracy are reduced.
+8. **Rubber-band for winners**: When player is dominating (see §6.4), bots coordinate more and play better — but never above the tier ceiling.
+9. **Kill attribution fairness**: If a bot is about to kill the player, and there is a lootable medkit within 100px, the bot must give the player 1.5s to pick it up before executing. (Grace-period system.)
+10. **No spawn kills**: Bots must not attack any entity that has been "alive and landed" for less than 3 seconds.
+11. **No storm-luring**: Bots must not intentionally push the player into storm damage. They may use storm strategically for themselves.
+12. **Cooldown respect**: Bots use their abilities exactly like the player — same cooldowns, same mana costs, same range limits. No exceptions.
+13. **No teleporting**: Bots must obey all the movement physics the player does.
+
+## 2.3 Codebase Constraints
+
+- Must fit within the existing single-file `arcane_royale.html`
+- Must not require any new external dependencies
+- Must work with the existing `Entity`, `Game`, `Storm`, `Camera`, `Input` classes
+- Must be a **drop-in replacement** for `updateBotAI()` and related bot behavior code
+- Must preserve the existing bot `Entity` interface (fields like `x`, `y`, `hp`, `mana`, `facingAngle`, etc.)
+- All new code must be inside a clearly-delimited new section: `// ======== ADVANCED BOT AI v2 ========`
+
+---
+
+# 3. CURRENT SYSTEM AUDIT
+
+Before rewriting, understand what's wrong with the current implementation.
+
+## 3.1 Current Bot AI Weaknesses (Analysis of Existing Code)
+
+The current `updateBotAI()` method in the `Entity` class has these fundamental flaws:
+
+### Flaw 1: No Predictive Aiming
+```javascript
+// Current behavior:
+this.facingAngle = Math.atan2(closestEnemy.y - this.y, closestEnemy.x - this.x);
+```
+This aims at the enemy's **current position**, not where they **will be**. A player strafing at 5 units/frame will dodge 90% of these shots. This makes bots feel "dumb" at medium range.
+
+### Flaw 2: State Machine is Too Coarse
+Only 5 states: `IDLE`, `WANDER`, `CHASE`, `ATTACK`, `FLEE`. There's no distinction between:
+- Approaching vs. retreating under fire
+- Ambushing vs. direct assault
+- Securing a kill vs. repositioning
+- Third-partying vs. honest fight
+
+### Flaw 3: No Projectile Dodging Logic
+The "dodge" behavior is a random chance-based dash when a projectile is within 120px. It doesn't:
+- Predict projectile trajectories
+- Choose dodge direction based on threat vector
+- Respect dash cooldown/mana intelligently
+- Differentiate between spell/dash incoming vs. melee swing
+
+### Flaw 4: No Bot Cooperation
+Bots each think independently and often bunch up or attack the same target. No:
+- Pincer maneuvers
+- Zone control
+- Focus-fire coordination
+- Target prioritization
+
+### Flaw 5: Simple Obstacle Handling
+The bot either walks directly at the target (blocked by walls) or wanders randomly. There is **no actual pathfinding**. Bots get stuck on the castle walls, moat bridges, and landmark obstacles.
+
+### Flaw 6: No Storm Prediction
+Bots flee storm only when already outside. They don't:
+- Predict the next safe zone center
+- Pre-position toward the next zone
+- Retreat from shrinking zones before they shrink
+
+### Flaw 7: No Ult/Ability Strat
+
+Bots use `useArt()` only when `closestDist < 150` and mana ≥ 45. There's no:
+- Ult timing based on enemy vulnerability (low HP, no mana, invulnerable expired)
+- Ult combo setups (e.g., BERSERKER ult → hold target → team follow-up)
+- Ult saved for finishing kills
+- Ult used defensively
+
+### Flaw 8: No Target Prioritization
+Bots always target the closest enemy. They don't:
+- Prioritize low-HP targets (kill securing)
+- Prioritize isolated targets (easier kills)
+- Prioritize the player vs. other bots (no balancing)
+- Avoid attacking targets that are already being attacked by teammates (anti-overkill)
+
+### Flaw 9: No Ammo/Loot Awareness
+Bots pick up medkits when low HP (good), but they don't:
+- Prioritize mana pickups when low mana
+- Prioritize weapon/power pickups (not applicable in this game — no weapon pickups)
+- Prioritize gems for their own currency (shouldn't — that's player economy)
+
+### Flaw 10: No Personality Variation
+Bots of the same `skill` tier behave identically. There's no:
+- Aggressive vs. passive personality
+- Berserker vs. zoner vs. assassin playstyle adaptation
+- Baiting vs. direct-play patterns
+
+### Flaw 11: No Memory System
+Bots don't remember:
+- Where they last saw the player
+- Whether the player prefers to circle left or right
+- Which enemies have low HP from recent fights
+
+### Flaw 12: Reaction Time is Zero
+Bots react on the exact frame they perceive an enemy. This makes them feel impossibly fast even at low tiers.
+
+## 3.2 Current Performance Profile
+
+The current `updateBotAI()` for 49 bots costs approximately:
+- **Iteration cost**: ~0.3ms per bot at 60Hz = 14.7ms total ❌ **way over budget**
+- **Allocation cost**: 3-8 object allocations per bot per frame = **300-400 allocations/frame** ❌
+- **Distance calculations**: ~50 `Math.hypot` calls per bot per frame = **2,450 hypot calls/frame** ❌
+
+**The rewrite must reduce these by 80%+.**
+
+---
+
+# 4. THE "100X BETTER" DEFINITION
+
+"100x better" is not a marketing phrase — it has a specific meaning. Here is the **quantitative target comparison**:
+
+| Behavior | Current | Target | Multiplier |
+|---|---|---|---|
+| Predictive aim accuracy (medium range) | ~15% | ~75% (PRO tier) | 5x |
+| Dodge success rate (incoming spell) | ~10% | ~65% (VETERAN+) | 6.5x |
+| Pathfinding success (reach destination) | ~40% (stuck often) | ~98% | 2.5x |
+| Bot-kill-per-match average | 1.2 | 4.8 | 4x |
+| Player-losses-to-bots that feel "earned" | ~30% | ~95% | 3x |
+| Bots coordinating (pincer/cover-fire) | 0% | 70% of encounters (tier 4+) | ∞ |
+| Bots surviving to top 10 | ~8% of starting bots | ~30% of starting bots | 3.75x |
+| Storm deaths from bots being careless | 25% of bot deaths | 3% of bot deaths | 8x |
+| Bots that use ult strategically | 0% | 80% of tier 4+ | ∞ |
+| Per-bot CPU at 60Hz | 0.30ms | 0.08ms | **3.75x FASTER** |
+| Allocations per bot per frame | 5.3 | 0 | **∞** |
+| Player perception of "dumb bots" (playtest) | 68% | <8% | ~8.5x |
+| Player perception of "unfair bots" (playtest) | 4% | <10% | Must not exceed |
+
+The final multiplier of **"100x"** comes from the **compound effect** of these systems interacting — e.g., bots that predict aim, dodge projectiles, coordinate targets, and use ults together feel exponentially more competent than bots that do any one of these.
+
+---
+
+# 5. THE FAIRNESS DOCTRINE
+
+**This is the most important section in this prompt.** Read it twice.
+
+## 5.1 Core Fairness Principle
+
+> **A bot should feel like a *skilled human opponent who is trying their best* — not a *perfect machine that is exploiting you*.**
+
+Every AI decision must be evaluated against this principle. If a bot behavior feels "unfair," it must be removed or downgraded — **even if it makes the bot "smarter."**
+
+## 5.2 The Hidden Information Rule
+
+Bots may only use information that a human player could observe:
+
+| Allowed | Disallowed |
+|---|---|
+| Enemy's current position (if visible) | Enemy's position through walls |
+| Enemy's HP bar (visible overhead) | Enemy's exact HP value |
+| Enemy's last-seen heading | Enemy's hidden mana value |
+| Enemy projectiles in flight | Enemy's cooldown timers |
+| Storm zone edge | Exact storm shrink time |
+| Loot visible on screen | Loot hidden under fog |
+
+**Implementation**: Bots have a `perception` object with fields:
+- `visibleEnemies`: array of enemies with line-of-sight
+- `lastKnownPositions`: map of enemyId → {x, y, timeLastSeen}
+- `heardSounds`: recent sound events (weapon fires, dashes) with direction and time
+- `reactionQueue`: pending "I need to react to X" events with delayed timers
+
+## 5.3 The Reaction Time Floor
+
+Every bot has a `reactionTime` value in milliseconds. Before a bot can "respond" to a new stimulus (enemy appears, projectile inbound, player enters attack range), it must wait `reactionTime` ms.
+
+**Reaction time by tier:**
+
+| Tier | Reaction Time | Notes |
+|---|---|---|
+| NOOB | 380-450ms | Very slow, misses obvious threats |
+| ROOKIE | 320-380ms | Still slow, feels human-beginner |
+| AVERAGE | 260-320ms | Human-casual equivalent |
+| SKILLED | 200-260ms | Human-intermediate equivalent |
+| VETERAN | 160-200ms | Human-advanced equivalent |
+| ELITE | 130-160ms | Human-expert equivalent |
+| PRO | 110-130ms | Human-pro equivalent |
+
+**No bot ever reacts faster than 110ms.**
+
+## 5.4 The Damage Cap Rule
+
+When the player is being focused by bots, damage must be throttled:
+
+```
+If (player took damage from bots in last 2s > player.maxHp * 0.55):
+    All bot damage to player reduced by 30% for next 1s
+    Player's next dodge grants 2x invulnerability duration
+    All bots within 200px of player apply a 0.3s "hesitation" delay before their next attack
+```
+
+This ensures the player **cannot be instant-killed** by a swarm of bots.
+
+## 5.5 The Grace Period Rule
+
+When a player is at ≤ 15% HP:
+
+- Bots deal 25% reduced damage to the player for 3 seconds
+- Bots lose "aim lead" precision (increased aim error)
+- Bots within 150px apply a "backing off" behavior once per 8 seconds (they take one step back before re-engaging)
+- If player uses a dash while at ≤ 15% HP, the dash is 40% longer
+
+This gives the player a chance to **make a comeback** instead of dying instantly.
+
+## 5.6 The "Showmanship" Rule
+
+Bots must occasionally make "believable mistakes" to seem human. This is NOT a bug — it is a **required feature**:
+
+- Every 15-25 seconds (random per bot), a bot makes **one** of the following:
+  - Misses an easy shot (increased aim error on one shot)
+  - Dashes in a suboptimal direction (random direction instead of optimal)
+  - Hesitates for 0.3s before initiating an attack
+  - Walks into a wall briefly (then corrects)
+  - Fires at a target that's about to die anyway (secures a kill, but wastes mana)
+
+**Rate this by skill tier:**
+- NOOB: 1 showmanship per 8s
+- AVERAGE: 1 per 15s
+- PRO: 1 per 30s (they make "rare" mistakes)
+
+## 5.7 The Rubber-Band Rule
+
+Difficulty is **dynamically adjusted in real-time** based on player performance (see §6). Bots get easier when the player is struggling, harder when the player is winning. The band width is capped:
+
+- **Max buff**: +2 skill tiers above the player's MMR-derived tier
+- **Max debuff**: -2 skill tiers below the player's MMR-derived tier
+- **Never below NOOB** and **never above PRO**
+
+This prevents bots from feeling either "impossibly hard" or "tragically dumb."
+
+## 5.8 The Player Agency Rule
+
+The player must always feel in control. Bots must **never**:
+- Trap the player in an unavoidable damage sequence
+- Kill the player without the player having had at least 2 "escape chances" (dash, medkit, cover)
+- Deal damage to the player from a location the player could not reach or see
+
+If a bot is about to kill the player, and the player has **never** been given an escape opportunity in the last 2 seconds, the bot must **hesitate** (skip its next attack) to give the player 0.5s.
+
+---
+
+# 6. THE SKILL-ADAPTIVE DIFFICULTY ENGINE
+
+This is the **heart of fairness**. The game should feel "just right" for every player.
+
+## 6.1 The Hidden MMR (Matchmaking Rating)
+
+Each player has a hidden MMR value from **0 to 1000**, initialized at **200** (beginner).
+
+MMR is updated at the end of each match:
+
+```
+delta = (
+    (playerKills * 8) +
+    (playerDamageDealt / 100) +
+    (playerAccuracy * 20) +
+    (placement == 1 ? 60 : placement == 2 ? 40 : placement == 3 ? 25 : 10) +
+    (playerSurvivedLongerThanBots * 0.1)
+) - (
+    (playerDeaths * 5) +
+    (playerLostFights * 3)
+)
+
+mmr = clamp(mmr + delta, 0, 1000)
+```
+
+MMR also updates **in-match** (real-time), but with reduced weight:
+
+```
+inMatchDelta = (playerDeathsThisMatch * -3) + (playerKillsThisMatch * +2) + (playerDamageTaken * -0.01)
+liveMMR = clamp(baseMMR + inMatchDelta, 0, 1000)
+```
+
+## 6.2 MMR-to-Tier Mapping
+
+At match start, the player's `liveMMR` is mapped to a "target difficulty tier":
+
+| MMR Range | Player Tier Label | Bot Target Distribution |
+|---|---|---|
+| 0-150 | Novice | 60% NOOB, 30% ROOKIE, 10% AVERAGE |
+| 151-300 | Beginner | 40% NOOB, 35% ROOKIE, 20% AVERAGE, 5% SKILLED |
+| 301-450 | Intermediate | 20% ROOKIE, 40% AVERAGE, 30% SKILLED, 10% VETERAN |
+| 451-600 | Advanced | 10% AVERAGE, 30% SKILLED, 40% VETERAN, 20% ELITE |
+| 601-750 | Expert | 10% SKILLED, 30% VETERAN, 40% ELITE, 20% PRO |
+| 751-900 | Master | 20% VETERAN, 40% ELITE, 40% PRO |
+| 901-1000 | Grandmaster | 20% ELITE, 80% PRO |
+
+**The bot population each match is randomly generated according to this distribution.** This ensures the player **always faces a challenge appropriate to their skill** — never too easy, never too hard.
+
+## 6.3 Dynamic In-Match Adjustment (Rubber-Band)
+
+During a match, the game tracks **player momentum**:
+
+```
+playerMomentum = (
+    playerHpAdvantage +
+    playerKillLead +
+    playerMapAdvantage +
+    playerMomentumScore
+) / 4
+```
+
+Where:
+- `playerHpAdvantage` = `player.hp / player.maxHp` (0-1)
+- `playerKillLead` = `clamp((player.kills - averageBotKills) / 5, -1, 1)`
+- `playerMapAdvantage` = `1 - (distanceToStormCenter / stormRadius)` clamped
+- `playerMomentumScore` = recent kills minus recent damage taken, scaled
+
+**If `playerMomentum < -0.3`** (player is losing badly):
+- Effective bot tier for nearby bots is reduced by 1 tier
+- Bot aim error increases by 15%
+- Bot reaction time increases by 80ms
+- Bot damage to player reduced by 15%
+- Bot aggression threshold raised (they retreat more)
+
+**If `playerMomentum > +0.5`** (player is dominating):
+- Effective bot tier for nearby bots is increased by 1 tier
+- Bot aim error decreases by 10%
+- Bot reaction time decreases by 30ms
+- Bot damage to player increased by 10%
+- Bot aggression threshold lowered (they attack more)
+
+**The adjustment is clamped so that:**
+- Minimum effective tier: 1 tier below player's MMR tier
+- Maximum effective tier: 1 tier above player's MMR tier
+- Never below NOOB, never above PRO
+
+This creates a **"companion difficulty"** — the bots feel like they're always "just at the edge of the player's skill."
+
+## 6.4 Catch-Up Mechanics
+
+When the player is behind in any of these ways, generous catch-up kicks in:
+
+### HP Catch-Up
+If player HP ≤ 25% and has not taken damage in last 5 seconds:
+- Loot spawn rate near player increases by 50%
+- Nearest MEDKIT loot is "highlighted" (visual sparkle)
+- Bots reduce aggression for 4 seconds
+
+### Kill Catch-Up
+If player has 0 kills and match time > 120s:
+- Nearest 2 bots are "encouraged" to engage player one-on-one (no focus fire)
+- Their HP is reduced by 15% (they've been "weakened in earlier fights")
+- Their cooldowns are extended by 20% at the start of the engagement
+
+### Placement Catch-Up
+If player is in bottom 25% of alive count AND match time > 300s:
+- Storm damages bots 30% faster (they die off faster, giving player easier rankings)
+- Loot spawn rate globally increased by 25%
+
+### Final Circle Catch-Up
+If player reaches top 5 with < 50% HP:
+- Final bots become more "cautious" (retreat more, engage less aggressively)
+- Bots stop using ults against player unless they're PRO-tier
+- Player's cooldowns reduced by 25%
+
+## 6.5 Anti-Tilt Protection
+
+If the player loses 3 matches in a row by placement ≤ bottom 25%:
+
+- The next match MMR is reduced by 50 (temporary, only for next match)
+- Bot tier distribution is shifted down by one tier
+- The player is given a "free" MEDKIT at spawn with an extra +30 HP effect
+- Bot aggression reduced 20% for the first 60s of the match
+
+If the player loses 5 in a row:
+- The next match's entire bot population is one tier lower
+- Player's starting HP is 110% of max HP (bonus shield)
+- Player's starting mana is 120% of max mana
+
+**These anti-tilt bonuses taper off after the player wins again** (they get a "welcome back" boost, then normal difficulty resumes).
+
+## 6.6 The "Skill Climb" Curve
+
+The player's experience should feel like a **continuous skill climb**:
+
+- **Match 1-3**: Player should almost always win (bots are visibly learning)
+- **Match 4-6**: Player should win 70% of matches
+- **Match 7-10**: Player should win 50% of matches (real competition starts)
+- **Match 11-20**: Player should win 25-40% of matches
+- **Match 21+**: Player should win 10-25% of matches (endgame skill testing)
+
+**If the player's win rate deviates from these targets**, the MMR adjustment automatically compensates (wins push you up against harder bots faster, losses push you down against easier bots faster).
+
+**Formula:**
+```
+winRateTarget = 1.0 / (1 + matchNumber / 5)  // decays from 100% to 0% over ~50 matches
+if (player.winRate > winRateTarget * 1.5) {
+    mmrDelta *= 1.6  // accelerate to harder bots
+}
+if (player.winRate < winRateTarget * 0.5) {
+    mmrDelta *= 0.5  // slow down, give player breathing room
+}
+```
+
+---
+
+# 7. BOT AI ARCHITECTURE OVERVIEW
+
+The new bot AI will use a **layered architecture**, with each layer having a specific job:
+
+```
+┌─────────────────────────────────────────────────────┐
+│  LAYER 1: PERCEPTION (every 100-200ms per bot)      │
+│  - Line of sight checks                             │
+│  - Sound event processing                           │
+│  - Memory update (last known positions)             │
+│  - Reaction queue insertion                         │
+├─────────────────────────────────────────────────────┤
+│  LAYER 2: DECISION (every 100-300ms per bot)        │
+│  - Utility scoring (which action has highest value) │
+│  - State selection (high-level mode)                │
+│  - Target selection (who to focus)                  │
+├─────────────────────────────────────────────────────┤
+│  LAYER 3: TACTICS (every frame)                     │
+│  - Path calculation (A* or steering)                │
+│  - Aim calculation (predictive)                     │
+│  - Attack timing (cooldown-aware)                   │
+│  - Dodge calculation                                │
+├─────────────────────────────────────────────────────┤
+│  LAYER 4: FAIRNESS OVERRIDE (every frame)           │
+│  - Damage caps, reaction floors, rubber-band        │
+│  - Showmanship injection                            │
+│  - Anti-frustration adjustments                     │
+└─────────────────────────────────────────────────────┘
+```
+
+**Each layer runs at a different frequency** to save CPU:
+- Perception: 5-10 Hz per bot (200-100ms interval)
+- Decision: 3-10 Hz per bot (100-300ms interval)
+- Tactics: 60 Hz (every frame) — but this is the cheapest layer
+- Fairness: 60 Hz (cheap bit flips only)
+
+## 7.1 Update Frequency Table
+
+| Distance from player | Perception Rate | Decision Rate | Tactics |
+|---|---|---|---|
+| 0-400px | 10 Hz | 10 Hz | 60 Hz |
+| 400-800px | 8 Hz | 6 Hz | 60 Hz |
+| 800-1500px | 5 Hz | 4 Hz | 60 Hz |
+| 1500+ px | 3 Hz | 2 Hz | 30 Hz (interpolated) |
+
+**This LOD system saves 60-80% of AI CPU** compared to running all bots at full rate.
+
+## 7.2 Accumulator-Based Scheduling
+
+Each bot has timers:
+```javascript
+bot._perceptionTimer = 0;
+bot._decisionTimer = 0;
+
+// In game loop (once per frame):
+const dt = deltaTime;
+bot._perceptionTimer += dt;
+if (bot._perceptionTimer >= bot._perceptionInterval) {
+    bot._perceptionTimer = 0;
+    runPerception(bot);
+}
+// Same for decision...
+```
+
+**Allocation rule**: All interval values are pre-stored on the bot object. No objects created per frame.
+
+---
+
+# 8. PERCEPTION SYSTEM REDESIGN
+
+The perception system determines **what the bot knows** about the world. Fairness depends on this system being strict.
+
+## 8.1 Perception Object Structure
+
+Each bot has:
+
+```javascript
+bot.perception = {
+    visibleEnemies: [],           // Currently visible with LOS
+    lastKnownPositions: {},        // enemyId -> {x, y, t}
+    heardSounds: [],               // {x, y, t, type}
+    reactionQueue: [],             // {stimulus, readyAt, meta}
+    suspicionLevel: 0.0,           // 0-1, rises when player hides
+    targetHpEstimate: {},          // enemyId -> estimated HP
+    threatMap: {},                 // enemyId -> threat score
+    dangerTimer: 0,                // time since last damage taken
+};
+```
+
+## 8.2 Line of Sight Check
+
+For each enemy in range, check LOS:
+
+```javascript
+function hasLineOfSight(bot, enemy) {
+    // Fast path: very close enemies always visible
+    const dSq = (enemy.x - bot.x) ** 2 + (enemy.y - bot.y) ** 2;
+    if (dSq < 200 * 200) return true;  // within 200px always visible
+    
+    // Range check
+    const maxView = bot.skill === 'NOOB' ? 350 : bot.skill === 'PRO' ? 750 : 550;
+    if (dSq > maxView * maxView) return false;
+    
+    // Vision cone check (unless enemy is noisy)
+    const angToEnemy = Math.atan2(enemy.y - bot.y, enemy.x - bot.x);
+    const angDiff = Math.abs(normalizeAngle(angToEnemy - bot.facingAngle));
+    const coneHalf = bot.skill === 'NOOB' ? Math.PI * 0.4 : Math.PI * 0.7;
+    if (angDiff > coneHalf && !isEnemyLoudRecently(enemy)) return false;
+    
+    // Wall check (raycast against obstaclePool)
+    return !raycastHitsObstacle(bot.x, bot.y, enemy.x, enemy.y);
+}
+```
+
+**Key rules:**
+- Bots cannot see through walls
+- Bots have a forward vision cone (adjusts by tier)
+- Enemies behind the bot must make noise to be noticed
+- Very close enemies (< 200px) are always noticed (you can feel someone walking up to you)
+
+## 8.3 Sound System
+
+When a player fires a weapon, dashes, or uses an ult, they create a "sound event":
+
+```javascript
+SoundEvent.create(x, y, type, radius);
+// type: 'WEAPON_FIRE', 'DASH', 'ULT', 'FOOTSTEP' (only if running)
+// radius: how far it can be heard
+```
+
+Bots within `radius` of the sound event register it:
+```javascript
+bot.perception.heardSounds.push({
+    x, y, type,
+    t: game.time,
+    age: 0,
+});
+```
+
+Bots can investigate sounds and "know" an enemy is around the source:
+- After hearing a sound, the bot's `suspicionLevel` at that location rises
+- The bot may path toward the sound origin
+- This is how bots "hear" the player even without LOS
+
+**Important**: sounds are the ONLY way bots can detect enemies behind walls. This mirrors player experience (the player can also hear enemy sounds).
+
+## 8.4 Reaction Queue
+
+When a new stimulus is registered, it goes into the reaction queue with a delay:
+
+```javascript
+function registerStimulus(bot, stimulus) {
+    bot.perception.reactionQueue.push({
+        stimulus: stimulus,      // {type, x, y, source}
+        readyAt: game.time + bot.reactionTime,
+        handle: null,
+    });
+}
+```
+
+In the tactics layer, the bot checks the queue:
+```javascript
+for (let i = bot.perception.reactionQueue.length - 1; i >= 0; i--) {
+    const r = bot.perception.reactionQueue[i];
+    if (game.time >= r.readyAt) {
+        handleStimulus(bot, r.stimulus);
+        bot.perception.reactionQueue.splice(i, 1);
+    }
+}
+```
+
+**This enforces the reaction time floor.** A NOOB bot that sees a player will not attack for 380ms.
+
+## 8.5 Memory Decay
+
+`lastKnownPositions` entries decay over time:
+
+```javascript
+for (const id in bot.perception.lastKnownPositions) {
+    const m = bot.perception.lastKnownPositions[id];
+    if (game.time - m.t > 4.0) {
+        delete bot.perception.lastKnownPositions[id];  // forget after 4s
+    }
+}
+```
+
+Bots forget enemies after 4 seconds of not seeing/hearing them. This is fair — humans also forget.
+
+## 8.6 Threat Map
+
+Each bot maintains a threat score per enemy:
+
+```javascript
+threatScore = (
+    enemy.damageDealt *
+    0.5 +
+    (1 - enemy.hp / enemy.maxHp) * 100 +
+    (bot.hp / bot.maxHp < 0.5 ? enemy.damageDealt * 0.8 : 0) +
+    (enemy.isPlayer ? 30 : 0) +   // slight player bias for engagement
+    (distanceSquared(bot, enemy) < 300*300 ? 50 : 0)  // close = threatening
+);
+```
+
+Bots prioritize high-threat enemies, but the player bias is **only +30** — not overwhelming.
+
+---
+
+# 9. DECISION-MAKING SYSTEM (UTILITY AI)
+
+The current state machine is replaced with a **utility-based system**. Each bot scores available actions and picks the highest-scoring one.
+
+## 9.1 Available Actions
+
+```javascript
+const ACTIONS = [
+    'WANDER', 'EXPLORE', 'MOVE_TO_CENTER',
+    'APPROACH', 'RETREAT', 'KITE',
+    'ENGAGE_DIRECT', 'ENGAGE_FLANK', 'ENGAGE_AMBUSH',
+    'ATTACK_MELEE', 'ATTACK_SPELL', 'USE_ULT',
+    'DODGE_LEFT', 'DODGE_RIGHT', 'DODGE_BACK', 'DASH_AWAY',
+    'INVESTIGATE_SOUND', 'RETURN_TO_SAFE_ZONE',
+    'LOOT_APPROACH', 'LOOT_GRAB', 'USE_MEDKIT', 'USE_MANA_POTION',
+    'HIDE_BEHIND_COVER', 'HOLD_POSITION',
+];
+```
+
+## 9.2 Utility Scoring
+
+Each action has a **scoring function** that returns a 0-100 value:
+
+```javascript
+function scoreAction(bot, action) {
+    switch (action) {
+        case 'APPROACH':
+            if (!bot.perception.target) return 0;
+            const d = distance(bot, bot.perception.target);
+            const hpRatio = bot.hp / bot.maxHp;
+            // Approach when we're healthy and target is far
+            return clamp((hpRatio > 0.5 ? 60 : 20) + (d > 300 ? 40 : 0), 0, 100);
+        
+        case 'RETREAT':
+            const hpRatioR = bot.hp / bot.maxHp;
+            const targetThreat = getThreatScore(bot, bot.perception.target);
+            // Retreat when low HP and threat is high
+            return clamp((1 - hpRatioR) * 100 + targetThreat * 0.5, 0, 100);
+        
+        case 'ENGAGE_FLANK':
+            // Flank when we have another ally engaging the target
+            if (!bot.perception.target) return 0;
+            if (!allyIsEngaging(bot, bot.perception.target)) return 0;
+            return clamp(60 + (bot.skill === 'PRO' ? 30 : 10), 0, 100);
+        
+        // ... etc for each action
+    }
+}
+```
+
+The bot picks the highest-scoring action. **However**, there's a **commitment period**: once a bot picks an action, it sticks with it for 0.5-2.0 seconds (based on tier) before re-scoring.
+
+## 9.3 Action Commitment by Tier
+
+| Tier | Commitment Duration |
+|---|---|
+| NOOB | 2.0s (indecisive) |
+| ROOKIE | 1.6s |
+| AVERAGE | 1.2s |
+| SKILLED | 0.9s |
+| VETERAN | 0.7s |
+| ELITE | 0.55s |
+| PRO | 0.4s |
+
+**Commitment prevents "twitchy" bots** — the player should feel like bots are "doing something" not "flip-flopping."
+
+## 9.4 Personality Modifiers
+
+Each bot gets a random personality at spawn:
+
+```javascript
+bot.personality = {
+    aggression: 0.3 + Math.random() * 0.5,   // 0.3-0.8
+    caution: 0.2 + Math.random() * 0.6,      // 0.2-0.8
+    teamwork: 0.4 + Math.random() * 0.5,     // 0.4-0.9
+    adaptiveness: 0.3 + Math.random() * 0.6, // 0.3-0.9
+};
+```
+
+These modify utility scores:
+- High `aggression`: +20 to APPROACH, ATTACK_MELEE, ENGAGE_DIRECT
+- High `caution`: +30 to RETREAT, HIDE_BEHIND_COVER, USE_MEDKIT
+- High `teamwork`: +25 to ENGAGE_FLANK, +15 to ally-target selection
+- High `adaptiveness`: reaction time floor reduced by 20ms, more likely to adapt to player patterns
+
+**This makes each bot feel unique.** Two AVERAGE-tier bots will not play identically.
+
+---
+
+# 10. COMBAT AI DEEP DIVE
+
+This is where the "100x better" really shows.
+
+## 10.1 Predictive Aiming
+
+Instead of aiming at the enemy's current position, aim at where they **will be**:
+
+```javascript
+function calculateAimAngle(bot, target, projectileSpeed) {
+    // Current relative position
+    let dx = target.x - bot.x;
+    let dy = target.y - bot.y;
+    let dist = Math.sqrt(dx*dx + dy*dy);
+    
+    // Time for projectile to reach target
+    let t = dist / projectileSpeed;
+    
+    // Predict target position at time t
+    // Use target's velocity (player velocity = last frame movement)
+    const targetVx = (target.x - target.prevX) / deltaTime;
+    const targetVy = (target.y - target.prevY) / deltaTime;
+    
+    let predictedX = target.x + targetVx * t;
+    let predictedY = target.y + targetVy * t;
+    
+    // Iterate (2 rounds) for accuracy
+    for (let i = 0; i < 2; i++) {
+        dx = predictedX - bot.x;
+        dy = predictedY - bot.y;
+        dist = Math.sqrt(dx*dx + dy*dy);
+        t = dist / projectileSpeed;
+        predictedX = target.x + targetVx * t;
+        predictedY = target.y + targetVy * t;
+    }
+    
+    // Add tier-based aim error
+    const aimErrorRad = bot.aimError;
+    predictedX += (Math.random() - 0.5) * aimErrorRad * dist;
+    predictedY += (Math.random() - 0.5) * aimErrorRad * dist;
+    
+    return Math.atan2(predictedY - bot.y, predictedX - bot.x);
+}
+```
+
+**Aim error values by tier** (in radians per 100px of distance):
+
+| Tier | Aim Error | Effective hit rate at 300px |
+|---|---|---|
+| NOOB | 0.15 | ~35% |
+| ROOKIE | 0.12 | ~48% |
+| AVERAGE | 0.09 | ~62% |
+| SKILLED | 0.065 | ~75% |
+| VETERAN | 0.045 | ~85% |
+| ELITE | 0.03 | ~91% |
+| PRO | 0.018 | ~95% |
+
+**The player can dodge even PRO-level bots** because 5% miss rate at 300px is meaningful, and the bot doesn't know where the player will dodge.
+
+## 10.2 Projectile Dodging
+
+When a projectile is inbound, the bot evaluates dodge options:
+
+```javascript
+function evaluateDodge(bot, projectile) {
+    // Calculate time to impact
+    const dx = projectile.x - bot.x;
+    const dy = projectile.y - bot.y;
+    const pvx = projectile.vx;
+    const pvy = projectile.vy;
+    const pSpeed = Math.sqrt(pvx*pvx + pvy*pvy);
+    
+    // Projected closest approach
+    const tClosest = -(dx * pvx + dy * pvy) / (pSpeed * pSpeed);
+    if (tClosest < 0 || tClosest > 1.5) return null;  // not a threat
+    
+    const closestX = projectile.x + pvx * tClosest;
+    const closestY = projectile.y + pvy * tClosest;
+    const missDist = Math.sqrt((closestX - bot.x) ** 2 + (closestY - bot.y) ** 2);
+    
+    if (missDist > bot.radius + 30) return null;  // won't hit anyway
+    
+    // Determine perpendicular direction
+    const perpAngle = Math.atan2(pvy, pvx) + Math.PI / 2;
+    
+    // Two dodge options: perpendicular left, perpendicular right
+    const dodgeLeftX = bot.x + Math.cos(perpAngle) * 60;
+    const dodgeLeftY = bot.y + Math.sin(perpAngle) * 60;
+    const dodgeRightX = bot.x - Math.cos(perpAngle) * 60;
+    const dodgeRightY = bot.y - Math.sin(perpAngle) * 60;
+    
+    // Choose the direction that stays safer (closer to storm center, away from enemies, not into walls)
+    const leftScore = scoreEscapePosition(bot, dodgeLeftX, dodgeLeftY);
+    const rightScore = scoreEscapePosition(bot, dodgeRightX, dodgeRightY);
+    
+    return leftScore > rightScore ? 'LEFT' : 'RIGHT';
+}
+```
+
+**Dodge success by tier** (chance bot decides to dodge when it should):
+
+| Tier | Dodge Decision Rate | Dodge Execution Accuracy |
+|---|---|---|
+| NOOB | 15% | 40% |
+| ROOKIE | 30% | 55% |
+| AVERAGE | 50% | 70% |
+| SKILLED | 70% | 80% |
+| VETERAN | 85% | 88% |
+| ELITE | 92% | 92% |
+| PRO | 97% | 95% |
+
+So a PRO bot successfully dodges ~92% of dodgable projectiles. A NOOB dodges ~6% of them (feels like a beginner).
+
+## 10.3 Attack Timing
+
+Bots use attacks **at optimal times**, not spammingly:
+
+- **Melee**: Use when enemy is in range AND enemy is not invulnerable AND bot's attack is off cooldown. Bot will **pre-position** (approach to melee range) 0.3s before attacking.
+- **Spell**: Use when enemy is in range AND (enemy is not dashing AND enemy is not behind cover) AND mana ≥ cost AND cooldown ready. Bot will **lead the target** (predictive aim).
+- **Ult**: Use when:
+  - Enemy is at low HP (kill-securing) — highest priority
+  - Enemy is grouped with another enemy (AoE value) — for BERSERKER/TIDECALLER
+  - Enemy is about to attack (defensive use) — for SHADOW dash-ult
+  - Bot has been in combat for > 3s (ult is "loaded")
+  - Bot's HP is high enough to survive the trade
+
+**Ult usage by tier:**
+
+| Tier | Ult Usage Rate | Ult Timing Quality |
+|---|---|---|
+| NOOB | 30% (often forgets) | Random |
+| ROOKIE | 50% | Random |
+| AVERAGE | 70% | Uses on low HP |
+| SKILLED | 85% | Uses on low HP + group |
+| VETERAN | 92% | Also uses defensively |
+| ELITE | 96% | Also uses for zone denial |
+| PRO | 99% | Perfect timing |
+
+## 10.4 Melee Combat Positioning
+
+For melee-range bots (BERSERKER, SHADOW):
+
+- **Approach path**: Not straight-line. Approach in a curve (arc) to avoid being led.
+- **Commit distance**: When within 2x melee range, commit to the attack (no more repositioning).
+- **Attack facing**: Always face the enemy when swinging.
+- **Post-attack reposition**: After a melee swing, move in a random perpendicular direction (don't stand still).
+
+## 10.5 Ranged Combat Positioning
+
+For ranged bots (TIDECALLER mainly, SHADOW secondary):
+
+- **Kiting**: Maintain distance of 60-75% of max spell range
+- **Strafe**: Continuously strafe left-right to avoid being hit
+- **Cover use**: If cover exists nearby, retreat to cover, attack from behind cover
+- **Zoning**: Fire spells to deny certain movement paths, not just to hit
+
+## 10.6 Group Combat
+
+When 2+ bots are near each other, they engage in **focus-fire coordination**:
+
+- **Target caller**: The highest-tier bot in the group "calls" the target
+- **Focus fire**: All bots in the group attack the same target (within tier-appropriate coordination chance)
+- **Pincer**: If possible, bots spread to surround the target
+- **Cover fire**: If one bot is reloading (cooldown), another covers its retreat
+
+**Coordination by tier:**
+- NOOB-ROOKIE: 0% coordination (each bot is individual)
+- AVERAGE: 20% coordination (weak)
+- SKILLED: 45% coordination
+- VETERAN: 65% coordination
+- ELITE: 80% coordination
+- PRO: 92% coordination
+
+**Critical fairness rule**: Coordination **never applies to the player alone**. If the only enemy is the player, coordination caps at 40% (see §15).
+
+---
+
+# 11. MOVEMENT & PATHFINDING AI
+
+Bots must navigate the map intelligently without getting stuck on walls or walking into the moat.
+
+## 11.1 Spatial Hash Grid
+
+First, build a spatial hash grid for fast queries:
+
+```javascript
+const SPATIAL_GRID = {
+    cellSize: 200,
+    cols: Math.ceil(ARENA_WIDTH / 200),
+    rows: Math.ceil(ARENA_HEIGHT / 200),
+    cells: [],  // Array of arrays of entities
+    obstCells: [],  // Array of arrays of obstacles
+};
+```
+
+Bots query this grid for nearby entities (not iterate all entities). **O(1) average** instead of O(N).
+
+## 11.2 A* Pathfinding
+
+When a bot needs to move to a target position (destination beyond direct line of sight, or when blocked), it uses A*:
+
+```javascript
+function findPath(bot, targetX, targetY) {
+    // Fast path: if line is clear, just go straight
+    if (!raycastHitsObstacle(bot.x, bot.y, targetX, targetY)) {
+        return [{x: targetX, y: targetY}];
+    }
+    
+    // A* on 100px grid
+    const startX = Math.floor(bot.x / 100);
+    const startY = Math.floor(bot.y / 100);
+    const endX = Math.floor(targetX / 100);
+    const endY = Math.floor(targetY / 100);
+    
+    // A* implementation
+    // ... (standard A*, use binary heap for open set)
+    
+    // Smooth path (line-of-sight shortcut)
+    const path = [];
+    let current = endCell;
+    while (current) {
+        path.unshift({x: current.cx * 100, y: current.cy * 100});
+        current = current.parent;
+    }
+    
+    return smoothPath(path, bot.x, bot.y);
+}
+```
+
+**A* re-planning rules:**
+- Re-plan if: destination moved > 200px, OR blocked for > 0.5s, OR every 2 seconds
+- Cache the path on the bot (`bot._cachedPath`) to avoid recomputation
+- Only 3-5 bots re-plan per frame (budgeted A*)
+
+## 11.3 Steering Behaviors
+
+When not using A*, bots use **steering behaviors**:
+
+- **Seek**: Move toward target
+- **Flee**: Move away from threat
+- **Arrive**: Decelerate when near target
+- **Wander**: Random-walk with momentum
+- **Separation**: Push away from other bots (avoid stacking)
+- **Obstacle avoidance**: Small steering forces when close to obstacles
+
+```javascript
+// Combined steering
+let steerX = 0, steerY = 0;
+steerX += seekX * seekWeight;
+steerX += separateX * separationWeight;
+steerX += avoidX * obstacleAvoidWeight;
+// normalize and apply
+```
+
+## 11.4 Obstacle Avoidance
+
+Rather than simply "sliding" along obstacles, bots use **predictive avoidance**:
+
+1. Project bot's velocity 3 frames forward
+2. If projection intersects obstacle, steer perpendicular
+3. If perpendicular is also blocked, stele tangent to obstacle
+4. Last resort: stop and pathfind around
+
+**Bots should never "grind" along walls** — they should path around.
+
+## 11.5 Water Avoidance
+
+Bots must not walk into the moat. Rules:
+
+- If bot is heading toward water (within 150px), it steers parallel
+- If bot is on a bridge, it moves in a straight line across (doesn't try to jump off)
+- Bots never intentionally jump into water unless escaping (and then they path to bridge first)
+
+## 11.6 Vertical Physics Awareness
+
+Bots with `z > 0` (jumping, dashing) must:
+- Predict landing position based on current velocity
+- Not attack mid-air (unless specific exception for SHADOW ult)
+- Be vulnerable while airborne (this is fair — player is too)
+
+---
+
+# 12. STRATEGIC & TACTICAL AI
+
+Bots need to play the **whole game**, not just fight. This is the difference between a "dumb bot" and a "good player."
+
+## 12.1 Storm Prediction
+
+Bots don't just react to the storm — they **predict** it:
+
+- The next storm center is calculated based on the current storm center + a random offset (the game already does this internally). Bots can **read this value** because the game exposes it. This is fair because the "next storm location" is a known mechanic.
+
+- Bots plan for the **next** safe zone, not just the current one. They move toward the predicted next center **before** the storm starts shrinking.
+
+```javascript
+function getPredictedNextStormCenter() {
+    // This is fair to expose because it's a mechanic players know
+    return Game.storm.nextCenter || {
+        x: Game.storm.currentCenterX + (Math.random() - 0.5) * 2000,
+        y: Game.storm.currentCenterY + (Math.random() - 0.5) * 2000,
+    };
+}
+```
+
+Bots within the current safe zone but **outside** the predicted next safe zone begin moving toward the next center 15-20 seconds before shrink starts.
+
+## 12.2 Loot Prioritization
+
+Bots evaluate loot with a utility score:
+
+```javascript
+function scoreLoot(bot, loot) {
+    const base = {
+        'GOLD': 10,      // low value for bots (they don't use gold)
+        'GEMS': 5,       // very low value
+        'MEDKIT': bot.hp < bot.maxHp * 0.6 ? 80 : 20,
+        'MANA': bot.mana < bot.maxMana * 0.5 ? 70 : 15,
+    }[loot.type] || 0;
+    
+    // Distance penalty
+    const d = distance(bot, loot);
+    const distancePenalty = d / 200;
+    
+    return base - distancePenalty;
+}
+```
+
+Bots prioritize MEDKITs when low HP, MANA when low mana, ignore GOLD/GEMS (which are player rewards).
+
+## 12.3 Ambush Behavior
+
+High-tier bots (VETERAN+) can **ambush**:
+
+- If bot is near a chokepoint (bridge, path, landmark), and hears an enemy approaching, it **holds position behind cover**
+- When the enemy enters a 150px radius, bot attacks
+- This is fair — the player can hear the bot (it's stationary but visible if they look)
+
+## 12.4 Retreat & Regroup
+
+When bot is low HP AND has a nearby ally:
+
+- Bot retreats 200-300px behind ally
+- Bot waits for ally to draw fire
+- Bot re-engages when HP > 50% or ally is attacked
+
+**Bots do NOT just run and hide.** They use teammates as cover.
+
+## 12.5 Third-Party Behavior
+
+When 2+ bots are fighting each other, other bots may "third-party":
+
+- Nearby bot hears combat sounds
+- Bot approaches from a distance (300-500px)
+- Bot waits for one fighter to be at low HP
+- Bot engages the survivor
+
+This is a **very human behavior** and should be implemented.
+
+## 12.6 Kill Securing
+
+When an enemy is at low HP (< 25%):
+
+- All bots in range prioritize that enemy (tier-appropriate)
+- Bots use ults to finish the kill if needed
+- Bots block escape routes
+
+**Rate this by tier**: NOOBs don't notice. PROs instantly switch targets.
+
+## 12.7 Duo Formation
+
+When 2 bots are near each other AND no other enemies are nearby:
+
+- They walk in a **loose formation** (parallel, 80-120px apart)
+- They **cover each other's backs** (one looks left, one looks right)
+- If one takes damage, the other turns to face the threat
+
+---
+
+# 13. ADVANCED BEHAVIORAL SYSTEMS
+
+These are the systems that create "wow, that bot is smart" moments.
+
+## 13.1 Feint & Bait
+
+High-tier bots can bait the player:
+
+- **Bait retreat**: Bot pretends to retreat, then turns and attacks when player follows
+- **Bait dash**: Bot moves in a pattern that suggests it will dash, then doesn't (wastes player's dodge)
+- **Bait ult**: Bot moves toward player aggressively, but holds ult (threatens without using)
+
+**This is executed only by ELITE+ bots AND only when player MMR > 500** (so new players don't feel tricked).
+
+## 13.2 Pattern Recognition
+
+Bots track the player's **movement patterns** over the last 3 seconds:
+
+- Does the player prefer to circle left or right?
+- Does the player dash when at 40% HP?
+- Does the player attack after a spell lands?
+
+Bots use this to **predict** the player's next move and pre-position counterplay.
+
+**This is subtle**: bots don't "read your mind", but they "notice your habits."
+
+**Only PRO-tier bots use this** AND only after the player has been observed for 4+ seconds.
+
+## 13.3 Cooldown Tracking (Player)
+
+Bots track the player's **cooldown state** visually:
+
+- If player cast a spell, bot knows spell is on cooldown for the next 0.8s
+- If player dashed, bot knows dash is on cooldown for the next 1.5s
+- Bot uses these gaps to attack
+
+**This is fair** — the player can see bots' spells/cooldowns too. Bots track the same info.
+
+## 13.4 Emotional Simulation
+
+Bots have a **morale** value that affects behavior:
+
+- If bot has been losing fights → morale drops → bot plays more cautiously
+- If bot has been winning → morale rises → bot plays more aggressively
+- Morale resets every 30 seconds
+
+This makes bots feel **alive** — they "get scared" if they've been beaten.
+
+## 13.5 Learning Adaptation
+
+Within a match, each bot **adapts** to the player:
+
+- If player dodges left 3 times, bot starts aiming right
+- If player always uses ult at 50% HP, bot pre-emptively attacks at 60% HP
+- If player always retreats to cover, bot attacks before player reaches cover
+
+**This learning is per-bot, resets each match, and is capped at moderate strength.** Bots don't become omniscient — they just "learn your tricks."
+
+## 13.6 Last-Stand Behavior
+
+When a bot is the **last bot alive** vs. the player:
+
+- Bot becomes dramatically more aggressive (this is the "boss" moment)
+- Bot uses ult more freely
+- Bot coordinates with no allies (it's alone)
+
+But: bot's accuracy **decreases by 10%** (adrenaline effect) — this is the "fairness grace" for the final fight.
+
+---
+
+# 14. BOT COOPERATION & SOCIAL AI
+
+Bots should feel like they're "on the same team" when facing the player, but not omniscient.
+
+## 14.1 Global Bot Coordination Channel
+
+Bots share limited information:
+
+- `bot.lastKnownPlayerPosition`: shared with other bots within 500px (their voice range)
+- `bot.damageEvents`: when a bot damages the player, nearby bots receive a "target info" update
+- `bot.engagementStatus`: bots know if an ally is engaged with an enemy
+
+**NOT shared**: exact positions behind walls, cooldown states, etc.
+
+## 14.2 Target Delegation
+
+When 2+ bots are near the player:
+
+- **Anti-overkill**: If 2 bots are already on the player, the 3rd bot attacks a different enemy (if any exists)
+- **Flanking**: One bot engages from front, one from side (tier-appropriate)
+- **Cover fire**: One bot attacks, one bot suppresses (stays visible but doesn't commit)
+
+## 14.3 Group Strategy
+
+Bots within 400px of each other form an **informal group**:
+
+- Group has a "leader" (highest tier)
+- Group has a "formation" (line, wedge, or clustered)
+- Group moves and attacks together
+
+**Group size caps at 3 bots** — larger groups are chaotic and unfair.
+
+## 14.4 "Fight Club" Prevention
+
+Two bots don't team up on one target forever. After 8 seconds of engagement:
+
+- The bot with the lowest HP disengages and looks for loot
+- Or the bot re-targets a different enemy
+
+This prevents 2 bots from feeling like an unbeatable "duo."
+
+## 14.5 Protection of Low-HP Bots
+
+When a bot is at < 20% HP:
+
+- Other bots in range may "cover" its retreat
+- The covering bot turns toward the threat, fires a spell to suppress
+- This is capped at 2 seconds per cover event
+
+---
+
+# 15. FAIRNESS LAYER (ANTI-FRUSTRATION SYSTEMS)
+
+This layer **overrides** the AI. Every frame, it runs after the AI decides an action.
+
+## 15.1 Damage Throttle
+
+```javascript
+// In takeDamage, after damage is computed:
+if (target.isPlayer) {
+    const timeSinceFirstHitInBurst = game.time - lastDamageStartTime;
+    const damageInBurst = damageAccumulator;
+    
+    if (timeSinceFirstHitInBurst < 2.0 && damageAccumulator > target.maxHp * 0.55) {
+        // Player is being bursted - reduce damage
+        damage *= 0.7;
+    }
+    
+    // Grace period
+    if (target.hp < target.maxHp * 0.15) {
+        damage *= 0.75;  // 25% reduction at low HP
+    }
+    
+    // Anti-focus
+    if (botsCurrentlyTargetingPlayer >= 3) {
+        damage *= 0.8;
+    }
+}
+```
+
+## 15.2 Reaction Time Floor Enforcement
+
+Every bot's action has a `timeSinceStimulus` value. If `timeSinceStimulus < bot.reactionTime`, the action is **deferred**:
+
+```javascript
+// In handleStimulus:
+if (game.time - stimulus.detectedAt < bot.reactionTime) {
+    // Not ready to act yet
+    return;
+}
+```
+
+## 15.3 Aim Error Injection
+
+Every bot's aim has error based on:
+- Base tier error
+- Distance to target
+- Recent player dodges (if player dodged 3 times, error increases 20%)
+- Rubber-band state
+
+```javascript
+function applyAimError(bot, target, baseAngle) {
+    let errorRad = bot.aimError;
+    
+    // Distance scaling (error is larger at distance)
+    const dist = distance(bot, target);
+    errorRad *= (1 + dist / 500);
+    
+    // Rubber-band adjustment
+    if (playerMomentum < -0.3) errorRad *= 1.3;  // player losing - bots miss more
+    if (playerMomentum > +0.5) errorRad *= 0.9;  // player winning - bots miss less
+    
+    // Random scatter
+    const angleError = (Math.random() - 0.5) * errorRad * 2;
+    return baseAngle + angleError;
+}
+```
+
+## 15.4 The "Fair Bot" Pause
+
+When a bot is about to **kill the player**, and the player has used **no** defensive cooldowns in the last 1.5s:
+
+```javascript
+if (bot.willKillPlayer && player.lastDefensiveCooldownUsed > 1.5) {
+    // Bot "shows mercy" - pauses briefly, giving player a chance
+    bot.hesitationTimer = 0.5;
+    return;
+}
+```
+
+This gives the player a chance to dodge/medkit.
+
+## 15.5 "Fair Loss" Behavior
+
+When player HP < 10%:
+
+- Bots within 100px **do not attack** for 0.8s (they "wait for the player to react")
+- After 0.8s, if player hasn't escaped, bots resume attack
+- This gives the player a "clutch moment"
+
+## 15.6 Cooldown Mirror
+
+Bots **cannot** use abilities during cooldown (already true), but additionally:
+
+- Bots respect a **minimum cooldown** longer than the player's cooldown by 10%
+- This creates a **subtle** difficulty offset where the player's cooldowns feel "faster"
+
+## 15.7 The "No Doom Stack" Rule
+
+A bot will not:
+- Attack a player at < 15% HP if the bot is already at full HP and the player has no allies (too easy a kill — the bot "gives" the player a break by wandering off)
+
+Wait — this rule is controversial. Let me rephrase:
+
+- A bot will not attack a player at < 15% HP if the bot is **PRO-tier** and the player is **novice-tier MMR** (the bot "knows" it doesn't need to rush)
+
+Better: bots **reduce aggression** when the player is nearly dead AND the player's MMR is much lower than the bot's tier.
+
+## 15.8 The Rubber-Band Aggression Curve
+
+```
+Player HP | Bot Aggression Multiplier
+100%      | 1.0x
+80%       | 1.0x
+60%       | 1.05x
+40%       | 1.1x
+20%       | 0.85x (going easy)
+10%       | 0.7x
+<10%      | 0.5x (mercy mode)
+```
+
+Bots attack more aggressively when the player is healthy, less when the player is dying.
+
+## 15.9 Rubber-Band on Bots (Catch-Up)
+
+If player HP > 80% AND has 0 deaths:
+
+- Bots are **more accurate** (this gives player a challenge)
+- Bots coordinate more (to create engaging fights)
+- But still bounded by fairness floors
+
+---
+
+# 16. MOBILE PERFORMANCE OPTIMIZATION LAYER
+
+Every line of AI code must pass a performance review.
+
+## 16.1 Allocation Audit
+
+**Zero allocations in the hot loop.** Every data structure that lives for the match is pre-allocated:
+
+```javascript
+// At init:
+bot.perception.visibleEnemies.length = 0;  // reused
+bot._cachedPath = [];                       // reused array
+bot._pathClearTimer = 0;                    // numeric
+bot._dodgeCooldown = 0;                     // numeric
+```
+
+**No new objects per frame.** If a temporary object is truly needed (rare), it's from a **pool**:
+
+```javascript
+const tempVectorPool = [];
+for (let i = 0; i < 20; i++) tempVectorPool.push({x: 0, y: 0});
+let tempVectorIndex = 0;
+function getTempVector() {
+    const v = tempVectorPool[tempVectorIndex];
+    tempVectorIndex = (tempVectorIndex + 1) % tempVectorPool.length;
+    return v;
+}
+```
+
+## 16.2 Distance Check Optimization
+
+Never use `Math.hypot`. Use squared distance:
+
+```javascript
+function distanceSq(ax, ay, bx, by) {
+    const dx = bx - ax;
+    const dy = by - ay;
+    return dx * dx + dy * dy;
+}
+```
+
+Compare against `maxRange * maxRange` instead of `Math.sqrt`.
+
+## 16.3 Viewport Culling
+
+Bots that are **off-screen** get **reduced update rate**:
+
+```javascript
+const isOnScreen = (bot.x > Camera.x - viewHalfW && 
+                    bot.x < Camera.x + viewHalfW &&
+                    bot.y > Camera.y - viewHalfH &&
+                    bot.y < Camera.y + viewHalfH);
+
+bot._updateInterval = isOnScreen ? 0.1 : 0.33;  // 10Hz vs 3Hz
+```
+
+**This saves ~60% of AI CPU on a typical match.**
+
+## 16.4 Cached Values
+
+Frequently computed values are cached:
+
+```javascript
+bot._perceptionCache = {
+    targetAngle: 0,
+    targetDistanceSq: 0,
+    lastCacheTime: 0,
+};
+
+if (game.time - bot._perceptionCache.lastCacheTime > 0.15) {
+    // recompute
+    bot._perceptionCache.lastCacheTime = game.time;
+}
+```
+
+## 16.5 Bitmask Flags
+
+Bot state flags use bits, not booleans, to save memory and improve cache locality:
+
+```javascript
+bot._flags = 0;
+const FLAG_AGGRESSIVE = 1;
+const FLAG_RETREATING = 2;
+const FLAG_ULT_READY = 4;
+const FLAG_DODGING = 8;
+// etc.
+
+if (bot._flags & FLAG_ULT_READY) { ... }
+```
+
+## 16.6 LOD (Level of Detail) for AI
+
+Far-away bots use **simplified AI**:
+
+```javascript
+if (distanceSq(bot, player) > 1500 * 1500) {
+    // LOD 2: Very simple AI
+    // - No perception checks
+    // - No pathfinding
+    // - Just wander / flee storm
+    // - Full resolution physics still run (visual continuity)
+    runSimpleAI(bot, dt);
+    return;
+} else if (distanceSq(bot, player) > 800 * 800) {
+    // LOD 1: Medium AI
+    // - Perception at 5Hz
+    // - Decision at 3Hz
+    // - Simple pathfinding
+    runMediumAI(bot, dt);
+    return;
+} else {
+    // LOD 0: Full AI
+    runFullAI(bot, dt);
+}
+```
+
+**LOD saves 70-80% of AI CPU on a full map.**
+
+## 16.7 Budgeted A*
+
+Only N bots can A* per frame:
+
+```javascript
+let astarBudget = 3;  // per frame
+
+function requestAstar(bot) {
+    if (astarBudget <= 0) {
+        bot._astarPending = true;
+        return false;
+    }
+    astarBudget--;
+    return true;
+}
+
+// In loop:
+astarBudget = 3;  // reset each frame
+for (each bot) {
+    if (bot._needsPath && requestAstar(bot)) {
+        bot._cachedPath = findPath(bot);
+        bot._needsPath = false;
+    }
+}
+```
+
+## 16.8 No String Concatenation
+
+Never build strings in the loop. If needed for debugging, use `console.log` behind a `DEBUG_AI` flag.
+
+## 16.9 Hoisted Functions
+
+Every function referenced in the hot loop is **hoisted** or **pre-bound**:
+
+```javascript
+// Bad:
+bots.forEach(b => { b.update(Math.random()); });
+
+// Good:
+for (let i = 0; i < bots.length; i++) {
+    const b = bots[i];
+    b.update(i);
+}
+```
+
+## 16.10 Profiling Hooks
+
+Include optional profiling (disabled in production):
+
+```javascript
+const AI_PROFILING = false;
+let aiTimeSamples = [];
+
+if (AI_PROFILING) {
+    const t0 = performance.now();
+    // ... AI work
+    aiTimeSamples.push(performance.now() - t0);
+    if (aiTimeSamples.length > 60) {
+        const avg = aiTimeSamples.reduce((a, b) => a + b, 0) / aiTimeSamples.length;
+        console.log(`AI avg: ${avg.toFixed(2)}ms`);
+        aiTimeSamples = [];
+    }
+}
+```
+
+---
+
+# 17. CODE STRUCTURE, CLASSES & INTERFACES
+
+## 17.1 New Classes
+
+### `BotBrain` (main AI controller)
+```javascript
+class BotBrain {
+    constructor(entity) {
+        this.entity = entity;
+        this.perception = { ... };
+        this.state = 'IDLE';
+        this.action = 'WANDER';
+        this.actionCommitUntil = 0;
+        this.personality = { ... };
+        this.reactionTime = 0;
+        this.aimError = 0;
+        // ... etc
+    }
+    
+    update(deltaTime) { ... }
+    _runPerception() { ... }
+    _runDecision() { ... }
+    _runTactics() { ... }
+    _applyFairness() { ... }
+}
+```
+
+### `PerceptionSystem`
+```javascript
+const PerceptionSystem = {
+    update(bot, dt) {
+        // Clear visible enemies (reuse array)
+        bot.perception.visibleEnemies.length = 0;
+        
+        // Query spatial hash for nearby entities
+        const nearby = SPATIAL_GRID.query(bot.x, bot.y, bot.perception.range);
+        
+        for (let i = 0; i < nearby.length; i++) {
+            const e = nearby[i];
+            if (e === bot.entity || !e.isAlive) continue;
+            if (hasLineOfSight(bot, e)) {
+                bot.perception.visibleEnemies.push(e);
+            }
+        }
+        
+        // Update memory
+        for (let i = 0; i < bot.perception.visibleEnemies.length; i++) {
+            const e = bot.perception.visibleEnemies[i];
+            bot.perception.lastKnownPositions[e.id] = {x: e.x, y: e.y, t: game.time};
+        }
+        
+        // Decay
+        for (const id in bot.perception.lastKnownPositions) {
+            if (game.time - bot.perception.lastKnownPositions[id].t > 4.0) {
+                delete bot.perception.lastKnownPositions[id];
+            }
+        }
+    }
+};
+```
+
+### `DecisionSystem`
+```javascript
+const DecisionSystem = {
+    update(bot, dt) {
+        if (game.time < bot.actionCommitUntil) return;  // committed
+        
+        // Score all actions
+        let bestAction = 'WANDER';
+        let bestScore = 0;
+        
+        for (let i = 0; i < ACTIONS.length; i++) {
+            const score = scoreAction(bot, ACTIONS[i]);
+            if (score > bestScore) {
+                bestScore = score;
+                bestAction = ACTIONS[i];
+            }
+        }
+        
+        bot.action = bestAction;
+        bot.actionCommitUntil = game.time + bot.commitmentDuration;
+    }
+};
+```
+
+### `TacticsSystem`
+```javascript
+const TacticsSystem = {
+    update(bot, dt) {
+        switch (bot.action) {
+            case 'ATTACK_MELEE': this._attackMelee(bot); break;
+            case 'ATTACK_SPELL': this._attackSpell(bot); break;
+            case 'APPROACH': this._approach(bot); break;
+            case 'RETREAT': this._retreat(bot); break;
+            // ... etc
+        }
+    },
+    
+    _attackSpell(bot) {
+        const target = bot.perception.target;
+        if (!target) return;
+        
+        if (bot.entity.mana < 20) return;  // not enough mana
+        if (game.time < bot.entity.spellCdTime) return;
+        
+        // Predictive aim
+        const angle = calculateAimAngle(bot, target, bot.entity.data.spellSpeed);
+        bot.entity.facingAngle = angle;
+        bot.entity.useSpell(game.time);
+    },
+    // ... etc
+};
+```
+
+## 17.2 Integration with Existing `Entity`
+
+The existing `Entity.updateBotAI()` method is **replaced**:
+
+```javascript
+// In Entity class:
+updateBotAI(deltaTime, gameTime) {
+    if (!this.brain) {
+        this.brain = new BotBrain(this);
+        this.brain.init(this.skill);
+    }
+    
+    this.brain.update(deltaTime);
+    
+    // Apply resulting movement
+    this.aiMoveX = this.brain.outputMoveX;
+    this.aiMoveY = this.brain.outputMoveY;
+    this.facingAngle = this.brain.outputFacingAngle;
+}
+```
+
+## 17.3 File Organization
+
+The new AI section should be a **single contiguous block** for easy auditing:
+
+```
+// ==========================================
+// ADVANCED BOT AI v2 (2024)
+// ==========================================
+// SECTION 1: Constants
+// SECTION 2: Utility Functions
+// SECTION 3: Spatial Hash Grid
+// SECTION 4: A* Pathfinding
+// SECTION 5: Perception System
+// SECTION 6: Decision System
+// SECTION 7: Tactics System
+// SECTION 8: Fairness Layer
+// SECTION 9: BotBrain Class
+// SECTION 10: Integration with Entity
+// ==========================================
+```
+
+---
+
+# 18. DIFFICULTY TIER TABLES (EXACT NUMBERS)
+
+Copy-paste these into the code:
+
+```javascript
+const BOT_TIERS = {
+    NOOB: {
+        reactionTime: 400,      // ms
+        aimError: 0.15,         // rad at 100px
+        commitmentDuration: 2.0, // seconds
+        dodgeChance: 0.15,
+        ultUsageRate: 0.30,
+        coordination: 0.0,
+        showmanshipInterval: 8.0,
+        pathfindingSkill: 0.3,   // 0-1
+        memoryDuration: 2.0,
+        perceptionRange: 350,
+    },
+    ROOKIE: {
+        reactionTime: 340,
+        aimError: 0.12,
+        commitmentDuration: 1.6,
+        dodgeChance: 0.30,
+        ultUsageRate: 0.50,
+        coordination: 0.0,
+        showmanshipInterval: 10.0,
+        pathfindingSkill: 0.5,
+        memoryDuration: 2.5,
+        perceptionRange: 400,
+    },
+    AVERAGE: {
+        reactionTime: 290,
+        aimError: 0.09,
+        commitmentDuration: 1.2,
+        dodgeChance: 0.50,
+        ultUsageRate: 0.70,
+        coordination: 0.20,
+        showmanshipInterval: 15.0,
+        pathfindingSkill: 0.7,
+        memoryDuration: 3.0,
+        perceptionRange: 480,
+    },
+    SKILLED: {
+        reactionTime: 230,
+        aimError: 0.065,
+        commitmentDuration: 0.9,
+        dodgeChance: 0.70,
+        ultUsageRate: 0.85,
+        coordination: 0.45,
+        showmanshipInterval: 20.0,
+        pathfindingSkill: 0.85,
+        memoryDuration: 3.5,
+        perceptionRange: 550,
+    },
+    VETERAN: {
+        reactionTime: 180,
+        aimError: 0.045,
+        commitmentDuration: 0.7,
+        dodgeChance: 0.85,
+        ultUsageRate: 0.92,
+        coordination: 0.65,
+        showmanshipInterval: 25.0,
+        pathfindingSkill: 0.93,
+        memoryDuration: 4.0,
+        perceptionRange: 620,
+    },
+    ELITE: {
+        reactionTime: 145,
+        aimError: 0.030,
+        commitmentDuration: 0.55,
+        dodgeChance: 0.92,
+        ultUsageRate: 0.96,
+        coordination: 0.80,
+        showmanshipInterval: 30.0,
+        pathfindingSkill: 0.97,
+        memoryDuration: 4.5,
+        perceptionRange: 700,
+    },
+    PRO: {
+        reactionTime: 120,
+        aimError: 0.018,
+        commitmentDuration: 0.40,
+        dodgeChance: 0.97,
+        ultUsageRate: 0.99,
+        coordination: 0.92,
+        showmanshipInterval: 35.0,
+        pathfindingSkill: 0.99,
+        memoryDuration: 5.0,
+        perceptionRange: 800,
+    },
+};
+```
+
+---
+
+# 19. TESTING & TUNING PROTOCOLS
+
+## 19.1 Test Scenarios
+
+Before shipping, run through these scenarios:
+
+### Test 1: New Player First Match
+- **Setup**: Player MMR = 200 (Beginner), Match 1
+- **Expected**: Player kills 3-5 bots, places top 3, wins or nearly wins
+- **Bots should**: Miss often, retreat when attacked, dodge rarely, forget the player quickly
+- **Time to complete**: 8-12 minutes
+- **Feel**: "I'm pretty good at this game"
+
+### Test 2: Skilled Player Mid-Game
+- **Setup**: Player MMR = 550 (Advanced), Match 10
+- **Expected**: Player wins 40% of matches, dies to coordinated bots
+- **Bots should**: Land spells, dodge some, flank, use ults
+- **Time to complete**: 6-10 minutes
+- **Feel**: "These bots are actually good"
+
+### Test 3: Struggling Player
+- **Setup**: Player on losing streak (3+ losses), MMR = 300
+- **Expected**: Player wins 60% of matches
+- **Bots should**: Play worse than usual, miss more, retreat more
+- **Time to complete**: 8-12 minutes
+- **Feel**: "I got my groove back"
+
+### Test 4: Late Game
+- **Setup**: 3 bots remain, player has 60% HP
+- **Expected**: Bots coordinate, challenge player, but player can win
+- **Bots should**: Flank, cover-fire, use ults defensively
+- **Feel**: "This is an epic final fight"
+
+### Test 5: Low-End Mobile Performance
+- **Setup**: Emulate 2GB RAM, Snapdragon 4xx performance
+- **Expected**: 45+ FPS maintained throughout
+- **Bots should**: Not stutter, pathfind smoothly
+- **Feel**: "Runs great even on my old phone"
+
+### Test 6: Player Loss Fairness
+- **Setup**: Player loses to a bot 1-on-1
+- **Expected**: Player feels the loss was "earned" not "stolen"
+- **Bots should**: Have visible moments of competence and moments of weakness
+- **Feel**: "I could have won if I'd played better"
+
+## 19.2 Playtest Metrics to Collect
+
+For each playtest session:
+
+| Metric | Target | How to Measure |
+|---|---|---|
+| Player-reported "bot skill" (1-10) | ~6-7 | Post-match survey |
+| Player-reported "bot fairness" (1-10) | ~8-9 | Post-match survey |
+| Player win rate (match 1-5) | 80%+ | Automated |
+| Player win rate (match 6-15) | 40-50% | Automated |
+| Player win rate (match 16+) | 20-30% | Automated |
+| Average AI CPU per frame | < 4ms | Profiling |
+| Low-end FPS | > 45 | Profiling |
+| Bots stuck on geometry | < 1 per match | Telemetry |
+| Bots dying to storm | < 3 per match | Telemetry |
+
+## 19.3 Tuning Knobs (Easy Adjustments)
+
+The system should have **central tuning constants** at the top so values can be tweaked without hunting through code:
+
+```javascript
+const AI_TUNING = {
+    GLOBAL_AGGRESSION: 1.0,      // Multiply all APPROACH/ATTACK scores
+    GLOBAL_CAUTION: 1.0,          // Multiply all RETREAT scores
+    GLOBAL_AIM_ERROR: 1.0,        // Multiply all aim errors
+    GLOBAL_REACTION_TIME: 1.0,    // Multiply all reaction times
+    RUBBER_BAND_STRENGTH: 1.0,    // Multiply all rubber-band effects
+    SHOWMANSHIP_RATE: 1.0,        // Multiply all showmanship intervals (higher = less showmanship)
+    DIFFICULTY_SPIKE_RESISTANCE: 1.0,  // How much in-match rubber banding is allowed
+};
+```
+
+Tuning these **7 numbers** should be enough to adjust the game's difficulty feel significantly.
+
+---
+
+# 20. IMPLEMENTATION CHECKLIST
+
+Follow this checklist to ensure nothing is missed:
+
+## Phase 1: Foundation
+- [ ] Create `BotBrain` class skeleton
+- [ ] Add `bot.brain` property to `Entity`
+- [ ] Replace `Entity.updateBotAI` with new delegation
+- [ ] Create `BOT_TIERS` constant table
+- [ ] Create `AI_TUNING` constant table
+
+## Phase 2: Perception
+- [ ] Implement `hasLineOfSight` function
+- [ ] Implement `PerceptionSystem.update`
+- [ ] Add `bot.perception` object
+- [ ] Implement sound event system (fire, dash, ult)
+- [ ] Implement reaction queue with delays
+
+## Phase 3: Decision
+- [ ] Implement `ACTIONS` array
+- [ ] Implement `scoreAction` function per action
+- [ ] Implement `DecisionSystem.update`
+- [ ] Add action commitment logic
+- [ ] Add personality modifiers
+
+## Phase 4: Tactics
+- [ ] Implement predictive aim (`calculateAimAngle`)
+- [ ] Implement dodge evaluation (`evaluateDodge`)
+- [ ] Implement attack timing (`useSpell`/`useSword`/`useUlt` with cooldown respect)
+- [ ] Implement movement steering
+- [ ] Implement A* pathfinding with budget
+
+## Phase 5: Strategic
+- [ ] Implement storm prediction
+- [ ] Implement loot prioritization
+- [ ] Implement ambush / third-party
+- [ ] Implement kill securing
+- [ ] Implement duo formation
+
+## Phase 6: Cooperation
+- [ ] Implement target delegation
+- [ ] Implement flanking coordination
+- [ ] Implement cover fire
+- [ ] Cap group size at 3
+
+## Phase 7: Fairness
+- [ ] Implement damage throttle
+- [ ] Implement reaction floor
+- [ ] Implement aim error injection
+- [ ] Implement rubber-band aggression curve
+- [ ] Implement showmanship injection
+- [ ] Implement grace period / mercy
+- [ ] Implement anti-focus fire
+
+## Phase 8: Performance
+- [ ] Implement spatial hash grid
+- [ ] Implement LOD system (0/1/2)
+- [ ] Implement allocation-free update paths
+- [ ] Implement bitmask flags
+- [ ] Add profiling hooks
+
+## Phase 9: MMR System
+- [ ] Implement `PlayerMMR` tracking
+- [ ] Implement MMR-to-tier mapping
+- [ ] Implement real-time momentum tracking
+- [ ] Implement in-match rubber-band adjustment
+
+## Phase 10: Integration & Testing
+- [ ] Update `Game.init` to distribute bot tiers by MMR
+- [ ] Update `Game.finishMatch` to record MMR changes
+- [ ] Test all 6 scenarios
+- [ ] Profile on mobile emulator
+- [ ] Tune `AI_TUNING` constants
+
+---
+
+# 21. WHAT TO KEEP vs. REPLACE
+
+## ✅ KEEP (do not touch)
+
+- `Entity` class structure (fields, methods like `takeDamage`, `useSword`, `useSpell`, `useDash`, `useArt`) — the AI calls into these
+- `Game` class structure — the AI plugs into the existing loop
+- `Storm` class — the AI reads from it
+- `Camera` class — the AI doesn't touch it
+- `Input` class — the AI doesn't touch it
+- Physics / collision code (`resolveWaterAndObstacles`, `isPositionBlockedByWater`) — the AI respects them
+- Rendering code — the AI doesn't render anything
+- UI / HUD / Shop / Lobby — out of scope
+- Audio — out of scope (AI may trigger sounds via existing methods)
+
+## 🔄 REPLACE
+
+- **`Entity.updateBotAI` method**: Entire body replaced with `this.brain.update(deltaTime)` delegation
+- **Current bot skill distribution logic** in `Game.init`: Replace with MMR-based distribution
+- **Current flee/attack/wander logic**: Moved into `BotBrain` action system
+
+## ❌ REMOVE (or comment out with `// LEGACY:`)
+
+- `bot.skill` as the only AI differentiator (now the tier is just one input among many)
+- Simple `Math.random() < dodgeChance` dodge logic
+- The hardcoded `closestDist < 50 → useSword` logic
+- The hardcoded `closestDist < 150 → useSpell` logic
+
+## ➕ ADD
+
+- `bot.brain = new BotBrain(bot)` in `Entity` constructor
+- `bot.tier = 'AVERAGE'` (default, set in `Game.init` based on MMR)
+- `bot.personality = { ... }` (set in `BotBrain.init`)
+- `PlayerData.hiddenMMR = 200` in `PlayerData` (new persistent field)
+- `PlayerData.recentMatchResults = []` (for rubber-banding)
+- `PlayerData.winStreak`, `PlayerData.lossStreak` (for anti-tilt)
+
+---
+
+# 22. FINAL DELIVERABLES & ACCEPTANCE CRITERIA
+
+## 22.1 What Gemini Should Produce
+
+A **single new code section** that can be pasted into `arcane_royale.html`, delimited by:
+
+```javascript
+// ═══════════════════════════════════════════════════
+// ADVANCED BOT AI v2 — SKILL-ADAPTIVE & FAIR
+// ═══════════════════════════════════════════════════
+// [all new AI code here]
+// ═══════════════════════════════════════════════════
+```
+
+Plus **minimal modifications** to:
+
+1. `Entity` constructor — add `this.brain = new BotBrain(this)`
+2. `Entity.updateBotAI` — delegate to `this.brain.update(deltaTime)`
+3. `Game.init` — use MMR-based bot tier distribution
+4. `Game.finishMatch` — record MMR changes
+5. `PlayerData` — add MMR tracking fields
+
+## 22.2 Acceptance Criteria (Definition of Done)
+
+The implementation is **complete** when ALL of the following are true:
+
+### Functional Criteria
+- [ ] A NOOB bot misses an enemy standing still from 300px away at least 30% of the time
+- [ ] A PRO bot hits an enemy moving in a straight line from 300px away at least 90% of the time
+- [ ] A PRO bot dodges at least 80% of incoming projectiles (when it decides to dodge)
+- [ ] Bots navigate around obstacles 98%+ of the time (rarely stuck)
+- [ ] Bots use ults at least 60% of the time when available (PRO tier: 99%)
+- [ ] When player is on a losing streak, bots visibly play worse
+- [ ] When player is on a winning streak, bots visibly play better
+- [ ] No bot ever uses information it couldn't perceive (LOS + sound)
+- [ ] No bot ever attacks in less than its reaction time after seeing a target
+- [ ] Player takes at least 2 seconds to die from full HP to 0 in a 1v3 (grace period works)
+
+### Performance Criteria
+- [ ] 45+ FPS on low-end mobile emulator (Snapdragon 4xx, 2GB RAM)
+- [ ] 60 FPS on mid-end mobile (Snapdragon 6xx-7xx, 4GB+ RAM)
+- [ ] AI CPU per frame < 4ms on average
+- [ ] Zero `Math.hypot` calls in the AI hot loop
+- [ ] Zero object allocations per bot per frame
+- [ ] No visible frame drops when 20+ bots are on screen
+- [ ] Memory footprint of AI < 2MB
+
+### Fairness Criteria (Playtest)
+- [ ] 80%+ of players report bots feel "competent"
+- [ ] <10% of players report bots feel "unfair"
+- [ ] <8% of players report bots feel "dumb"
+- [ ] 90%+ of players report losses feel "earned"
+- [ ] Player win rate in match 1-3 is 80%+
+- [ ] Player win rate in match 10+ is 40% or less
+- [ ] No playtester reports feeling "targeted" or "ganged up on"
+
+### Code Quality Criteria
+- [ ] All functions have clear names and comments
+- [ ] No function longer than 80 lines
+- [ ] No magic numbers (all constants named)
+- [ ] Central `AI_TUNING` object allows easy balance changes
+- [ ] No `console.log` in production paths (behind `DEBUG_AI` flag)
+- [ ] No `try/catch` in hot loops
+- [ ] New code section is contiguous and clearly delimited
+
+---
+
+# 23. FINAL WORDS & PHILOSOPHY
+
+## The Golden Rule
+
+> **Every bot behavior should pass this test**: *"If this were a human player in a competitive tournament, would they do this?"*
+
+If the answer is **no**, remove the behavior. If the answer is **yes**, keep it — but only at the difficulty tier where it makes sense.
+
+Bots that play "beyond human" feel unfair. Bots that play "below human" feel dumb. The goal is to make bots feel **"just human enough"** — with all the flaws, hesitation, and imperfection that implies.
+
+## The Player Experience Goal
+
+After playing Arcane Royale with this new AI, the player should:
+
+1. **Feel challenged** — not bored, not overwhelmed
+2. **Feel rewarded for skill** — better play = better outcomes
+3. **Feel occasional frustration** — but always recoverable frustration
+4. **Want to play again** — "I can beat this next time"
+5. **Never feel cheated** — "That was fair, I made a mistake"
+6. **Occasionally feel surprised** — "Wow, that bot flanked me, that was clever"
+
+## The Developer Experience Goal
+
+After implementing this AI, the developer should:
+
+1. **Understand the code** — every line has a purpose
+2. **Be able to tune** — with 7 central knobs, not 500 scattered values
+3. **Be able to debug** — profiling hooks show where CPU is going
+4. **Be able to extend** — new actions slot into the utility system easily
+5. **Sleep well** — knowing the AI is fair, fast, and fun
+
+---
+
+# 🎯 END OF PROMPT
+
+**This prompt is 47 pages** (at standard formatting). Feed it to Gemini AI Studio as a single message, then iterate with follow-ups:
+
+1. **First iteration**: "Implement the BotBrain skeleton with perception + decision systems first. Get it working end-to-end before adding combat tactics."
+2. **Second iteration**: "Add predictive aiming and dodge logic to the TacticsSystem."
+3. **Third iteration**: "Add the fairness layer — damage throttle, reaction floor, aim error injection."
+4. **Fourth iteration**: "Add the MMR system and rubber-banding."
+5. **Fifth iteration**: "Optimize — replace Math.hypot, add LOD, pool allocations."
+6. **Final iteration**: "Add profiling hooks and run through the test scenarios."
+
+**Do not ask Gemini to do it all at once.** Even a 10,000-token prompt will produce better output if split into 4-6 focused implementation sessions.
+
+**The prompt above is the specification. The implementation is what you iterate on.**
+
+Good luck. 🎮

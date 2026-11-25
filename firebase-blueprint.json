@@ -1,0 +1,106 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated player profile, currencies, unlocked items, career stats, dual-orientation HUD layouts, and Friend Code (zero PII).",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "displayName": { "type": "string", "minLength": 3, "maxLength": 12, "pattern": "^[a-zA-Z0-9_]+$" },
+        "displayNameLower": { "type": "string", "minLength": 3, "maxLength": 12, "pattern": "^[a-z0-9_]+$" },
+        "friendCode": { "type": "string", "pattern": "^ARC-[A-HJ-NP-Z2-9]{4}$" },
+        "authProvider": { "type": "string", "enum": ["password", "google", "anonymous"] },
+        "isPublic": { "type": "boolean" },
+        "level": { "type": "integer" },
+        "xp": { "type": "integer" },
+        "coins": { "type": "integer" },
+        "crystals": { "type": "integer" },
+        "gems": { "type": "integer" },
+        "unlockedChampions": { "type": "array" },
+        "selectedChampion": { "type": "string", "enum": ["BERSERKER", "TIDECALLER", "SHADOW"] },
+        "unlockedRunes": { "type": "array" },
+        "equippedRune": { "type": ["string", "null"] },
+        "unlockedTrails": { "type": "array" },
+        "equippedTrail": { "type": "string" },
+        "statTiers": { "type": "object" },
+        "careerStats": { "type": "object" },
+        "hudLayouts": { "type": "object" },
+        "createdAtMs": { "type": "integer" },
+        "updatedAtMs": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "uid",
+        "displayName",
+        "displayNameLower",
+        "friendCode",
+        "authProvider",
+        "isPublic",
+        "level",
+        "xp",
+        "coins",
+        "crystals",
+        "gems",
+        "unlockedChampions",
+        "selectedChampion",
+        "careerStats",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "FriendCode": {
+      "title": "FriendCode",
+      "description": "Immutable unique ARC-XXXX code mapping to a player UID for instant friend lookup.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "displayName": { "type": "string", "minLength": 3, "maxLength": 12 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "createdAt"]
+    },
+    "FriendLink": {
+      "title": "FriendLink",
+      "description": "Mutual friendship edge under users/{uid}/friends/{friendUid}.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "displayName": { "type": "string", "minLength": 3, "maxLength": 12 },
+        "friendCode": { "type": "string", "maxLength": 12 },
+        "since": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "friendCode", "since"]
+    },
+    "FriendRequest": {
+      "title": "FriendRequest",
+      "description": "Pending incoming friend request under users/{targetUid}/friendRequests/{fromUid}.",
+      "type": "object",
+      "properties": {
+        "fromUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "fromName": { "type": "string", "minLength": 3, "maxLength": 12 },
+        "fromCode": { "type": "string", "maxLength": 12 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["fromUid", "fromName", "fromCode", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Player cloud progression, career stats, HUD profiles, and public Top-50 leaderboard data (zero PII)."
+    },
+    "/users/{userId}/friends/{friendUid}": {
+      "schema": { "$ref": "#/entities/FriendLink" },
+      "description": "Mutual friends subcollection updated atomically via writeBatch."
+    },
+    "/users/{userId}/friendRequests/{fromUid}": {
+      "schema": { "$ref": "#/entities/FriendRequest" },
+      "description": "Incoming friend requests created only by fromUid."
+    },
+    "/friendCodes/{code}": {
+      "schema": { "$ref": "#/entities/FriendCode" },
+      "description": "Immutable unique ARC-XXXX friend code directory."
+    }
+  }
+}

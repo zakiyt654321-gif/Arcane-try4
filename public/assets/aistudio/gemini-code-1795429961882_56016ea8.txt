@@ -1,0 +1,64 @@
+Apply the following comprehensive mobile-only updates to Arcane Royale. Preserve all existing Level 1–100 progression, unique bot names/plates, full death animations, and localStorage save data compatibility:
+
+========================================
+1. MOBILE UI POLISH, CUSTOM HUD EDITOR & QOL
+========================================
+- Fix Broken Favicon & Duplicate Inventory:
+  - Replace the invalid favicon link (`about:invalid#zCSafez`) with an inline SVG data-URI arcane crystal icon.
+  - Consolidate the match inventory into a single component (the Quick-Use Loot button with the ▲ expand fan) and remove the duplicate legacy 5-slot DOM container so touch inputs never collide.
+- Responsive Mobile Landscape Dialogs:
+  - Make the Drop Zone map canvas (`max-height: 56vh; aspect-ratio: 1/1`) and Victory Elimination Cam canvas (`max-width: 100%; max-height: 34vh`) responsive so they never clip vertically on 360px–412px tall mobile landscape screens.
+  - Hide the `🏆 LEVEL MILESTONE UNLOCKED!` banner on the Victory screen unless the player actually crossed a 5-level, 10-level, or Level 100 threshold in that match.
+- Customisable Mobile HUD Editor:
+  - Add a "Customize HUD" button inside Audio & Settings opening a full-screen layout editor over a live arena preview where players can drag to reposition, scale (`75%–135%`), and adjust opacity (`40%–100%`) for the Left Joystick, Right Action Cluster, Quick-Use Loot button, Top-Left Resource Bars, and Minimap, with Reset/Cancel/Save buttons persisted in localStorage.
+- Mobile App Experience (PWA, Wake Lock & Save Backup):
+  - Inject a dynamic inline Web App Manifest (`display: "standalone"`, `orientation: "landscape"`) and offline-capable Service Worker cache so Android players can install Arcane Royale to their home screen without a browser URL bar.
+  - Request `navigator.wakeLock.request('screen')` during active matches (re-acquiring on `visibilitychange`) so the screen never dims mid-fight.
+  - Add one-tap **Export Save Code** (copies Base64 JSON save string to clipboard) and **Import Save Code** buttons inside Settings.
+
+========================================
+2. CHAMPION BALANCE & ELEMENTAL REACTION COMBOS
+========================================
+- Champion Tuning:
+  - The Berserker (Fire): Add a subtle forward step-lunge on basic sword swings, grant 25% damage reduction and knockback resistance during Crimson Cleave wind-up, and apply a 1.5s Fire Burn (12% bonus damage over time) on hit.
+  - The Tidecaller (Water): Add a short close-range knockback pulse at the start of Tidal Wave for self-peel against divers, while tapering Tidal Wave width slightly at max range.
+  - The Shadow (Dark): Make Line Teleport Slash deal +25% bonus backstab/flank damage when hitting targets facing away or below 50% HP, balanced by a 1.5s post-teleport vulnerability window (+12% damage taken).
+- Elemental Status Priming & 3 Reaction Combos:
+  - Ability hits apply a 4.0s Elemental Aura (Fire, Water, or Dark) around the target's feet with a small icon beside their HP bar (2.5s post-reaction cooldown per target).
+  - Steam Eruption (Fire + Water): `110px` AoE shockwave dealing 18% max-HP bonus burst damage, light knockback, and a 2.5s Steam Cloud reducing enemy aim accuracy inside by 30%.
+  - Shadowflame Ignition (Fire + Dark): High single-target burst (+25% bonus damage, +40% if target is below 45% HP) and -35% healing/shield effectiveness for 3 seconds.
+  - Abyssal Undertow (Water + Dark): Pulls target `45px` inward, slows movement by 45% for 1.5s, and refunds `15 MP` + reduces active cooldowns by `1.0s` for the attacker.
+
+========================================
+3. FAIR BOT OVERHAUL & CHAMPION ARCHETYPES
+========================================
+- Fair Combat & Anti-Swarming:
+  - Scale Bot Max HP and Base Damage gently from `0.85x` (Level 1) to `1.12x` (Level 100).
+  - Scale reaction delay from `0.55s` (Level 1) down to `0.28s` (Level 100), widen aim spread from `±14°` down to `±5°` with capped 50% velocity prediction, enforce a `0.70s–1.10s` hesitation buffer between basic attacks and `E`/`Q` spells, add a `0.35s` telegraph glow before high-damage spells, and cap defensive Dash dodges to once every `6–8s`.
+  - Limit active aggro against the human player to at most **2 bots at a time**; extra nearby bots fight each other or hold perimeter spacing.
+- Smart Navigation & Match Pacing:
+  - Use 3 forward feeler probes (center, `±30°`) so bots steer smoothly around obstacles without wall-sticking, and override duels to sprint toward the safe zone whenever the storm closes or within `90px` of the storm border.
+  - Apply `0.35x` damage to off-screen bot-vs-bot fights in Storm Phase 1 (`0.60x` in Phase 2) and force off-screen bots below 35% HP to disengage and heal for 3 seconds so 22–28 fighters survive into mid-game.
+- Distinct Champion Bot Archetypes (with subtle role badge next to LVL):
+  - The Berserker (`BRAWLER`): Closes to `45px–110px` using `±22°` zig-zag weaves, refuses to retreat above 25% HP, saves Dash as a gap-closer, and opens melee range with Crimson Cleave.
+  - The Tidecaller (`ZONER`): Maintains `210px–340px` range, backpedals laterally if rushed within `150px`, disengages to heal below 45% HP, keeps 45% MP in reserve for peel, and saves Dash strictly to escape melee.
+  - The Shadow (`FLANKER`): Circles at `150px–230px` using `70°–85°` orbital strafing to reach behind targets, uses bushes for ambushes, holds Line Teleport Slash until targets drop below 55% HP or are elementally primed, chains `Q` after `0.70s`, and dashes out laterally `1.2s` later.
+
+========================================
+4. 2.5D ENGINE POLISH, STORM, LOOT & PROGRESSION
+========================================
+- 2.5D Y-Sorting, Sliding Collision & Combat "Juice":
+  - Sort all visible world entities by foot `Y` coordinate every frame and draw overhead plates in a separate top pass afterward. Resolve X and Y collisions separately for smooth wall sliding with a post-dash unstuck check.
+  - Add subtle camera shake (`2px–4px`, `110ms`) and `30ms` hit-stop on heavy spells/reactions, directional red damage arcs for off-screen hits, and a pulsing crimson low-HP vignette below 25% HP.
+- Interactive Arena & Smart Loot:
+  - Add Auto-Loot toggle in Settings plus automatic rarity replacement on full stacks (swapping lower-tier items for higher-tier upgrades and popping replaced items onto the ground).
+  - Add Arcane Jump Pads on key island ridges and 2 glowing Arcane Supply Crates dropping inside the safe zone at Storm Phases 2 and 3 (marked on minimap).
+- 5-Phase Storm, Bounty Leader & Endgame Sinks:
+  - Scale storm damage across 5 phases (`4 -> 8 -> 14 -> 22 -> 35 HP/s`), apply `-40%` healing effectiveness outside the safe zone, and draw a dashed white next-circle preview ring on the minimap during SAFE timers.
+  - Mark the match kill-leader (3+ elims) with a minimap crown bounty awarding double Coins + bonus XP when eliminated.
+  - Add 3 rotating Daily Missions on the lobby screen, expand Permanent Fighter Upgrades to 25 tiers per stat, and add 3 Coin-purchasable Arcane Runes (`Vampiric Edge`, `Swift Stride`, `Arcane Capacitor`) in the Shop.
+
+========================================
+5. LOCKED 60 FPS MOBILE CANVAS OPTIMIZATION
+========================================
+- Clamp canvas `devicePixelRatio` by Graphics Quality (`1.0` Low, `1.25` Medium, `1.5` High, plus a `30 FPS` Battery Saver option), snap draw coordinates with `Math.round()`, cache static terrain on offscreen canvases, replace `ctx.shadowBlur` with pre-rendered glow sprites, tick distant off-screen bots at `15 Hz`, and reuse fixed object pools for all projectiles and particles.

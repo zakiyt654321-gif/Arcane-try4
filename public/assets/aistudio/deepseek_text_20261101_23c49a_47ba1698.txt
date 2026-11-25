@@ -1,0 +1,49 @@
+Update the game. I need you to fix the GitHub asset URL and completely overhaul the visual effects for the drop mechanic to make it feel like falling from the sky. Do NOT touch the map layout, Landscape UI, or water physics.
+
+=== 1. UPDATE GITHUB ASSET URL ===
+Find the `const ASSET_BASE` variable (near the top of the AssetLoader object). 
+Change it to exactly this:
+const ASSET_BASE = 'https://zakiyt654321-gif.github.io/Arcane-Royal-2.5D/assets/';
+
+=== 2. INCREASE DROP HEIGHT ===
+In `Game.init()`, find where the player spawns:
+`this.player.z = 2000;`
+Change it to `this.player.z = 4000;` (This gives a longer fall time).
+Also change the bots to `bot.z = 4000 + Math.random() * 500;`.
+
+=== 3. ADD DARK SKY VOID (renderCanvas) ===
+At the very beginning of `renderCanvas()`, right after `CTX.clearRect(...)`, add this:
+if (Game.state === "DROPPING") {
+  CTX.fillStyle = '#0f172a'; // Dark night sky
+  CTX.fillRect(0, 0, window.innerWidth, window.innerHeight);
+}
+
+=== 4. ADD WIND SPEED LINES (renderCanvas) ===
+At the very end of `renderCanvas()` (right before the closing brace), add this to draw wind streaks:
+if (Game.state === "DROPPING") {
+  CTX.save();
+  CTX.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+  CTX.lineWidth = 2;
+  CTX.beginPath();
+  for (let i = 0; i < 20; i++) {
+    const x = Math.random() * window.innerWidth;
+    const y = Math.random() * window.innerHeight;
+    const length = Math.random() * 50 + 20;
+    CTX.moveTo(x, y);
+    CTX.lineTo(x, y - length);
+  }
+  CTX.stroke();
+  CTX.restore();
+}
+
+=== 5. FIX THE PARTICLE TRAIL (Game.update) ===
+In `Game.update()`, inside `if (this.state === "DROPPING")`, find:
+`spawnParticles(this.player.x, skyY, 3, trailColor, 3.5, 0.035);`
+Change it to:
+`spawnParticles(this.player.x, skyY, 5, trailColor, 8, 0.035);`
+
+=== 6. HIDE THE STORM DURING DROP ===
+At the very top of `Storm.draw(ctx)`, add this line:
+`if (Game.state === "DROPPING") return;`
+
+Return the FULL updated HTML file.

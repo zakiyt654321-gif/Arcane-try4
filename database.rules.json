@@ -1,0 +1,81 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "presence": {
+      "$uid": {
+        ".read": "auth != null",
+        ".write": "auth != null && auth.uid === $uid",
+        ".validate": "newData.hasChildren(['state']) && (newData.child('state').val() === 'online' || newData.child('state').val() === 'in_squad' || newData.child('state').val() === 'in_match' || newData.child('state').val() === 'offline')"
+      }
+    },
+    "invites": {
+      "$targetUid": {
+        ".read": "auth != null && auth.uid === $targetUid",
+        "$squadId": {
+          ".write": "auth != null && (auth.uid === $targetUid || (!data.exists() && newData.child('fromUid').val() === auth.uid))",
+          ".validate": "!newData.exists() || (newData.hasChildren(['squadId', 'fromUid', 'fromName', 'createdAt']) && newData.child('fromName').isString() && newData.child('fromName').val().length <= 12)"
+        }
+      }
+    },
+    "squads": {
+      "$squadId": {
+        ".read": "auth != null",
+        ".write": "auth != null && ((!data.exists() && newData.child('leaderUid').val() === auth.uid) || data.child('leaderUid').val() === auth.uid || data.child('members').child(auth.uid).exists())",
+        "leaderUid": {
+          ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 128"
+        },
+        "isPrivate": {
+          ".validate": "newData.isBoolean()"
+        },
+        "members": {
+          "$memberUid": {
+            ".write": "auth != null && (root.child('squads').child($squadId).child('leaderUid').val() === auth.uid || (auth.uid === $memberUid && (data.exists() || root.child('squads').child($squadId).child('isPrivate').val() !== true)))",
+            ".validate": "!newData.exists() || (newData.hasChildren(['uid', 'displayName', 'championId']) && newData.child('displayName').isString() && newData.child('displayName').val().length >= 3 && newData.child('displayName').val().length <= 12)"
+          }
+        }
+      }
+    },
+    "matches": {
+      "$matchId": {
+        ".read": "auth != null && data.child('members').child(auth.uid).exists()",
+        ".write": "auth != null && !data.exists() && newData.child('hostUid').val() === auth.uid",
+        "hostUid": {
+          ".write": "auth != null && data.parent().child('members').child(auth.uid).exists() && ((!data.exists() && newData.val() === auth.uid) || (data.exists() && newData.val() === auth.uid && (data.parent().child('members').child(data.val()).child('connected').val() === false || data.parent().child('players').child(data.val()).child('connected').val() === false || (data.parent().child('players').child(data.val()).child('hb').isNumber() && (now - data.parent().child('players').child(data.val()).child('hb').val()) > 8000))))"
+        },
+        "status": {
+          ".write": "auth != null && data.parent().child('hostUid').val() === auth.uid",
+          ".validate": "(!data.exists() && newData.val() === 'dropping') || (data.val() === 'dropping' && (newData.val() === 'active' || newData.val() === 'finished')) || (data.val() === 'active' && newData.val() === 'finished')"
+        },
+        "members": {
+          "$memberUid": {
+            ".write": "auth != null && (auth.uid === $memberUid || data.parent().parent().child('hostUid').val() === auth.uid)"
+          }
+        },
+        "players": {
+          "$memberUid": {
+            ".write": "auth != null && auth.uid === $memberUid && data.parent().parent().child('members').child(auth.uid).exists()",
+            ".validate": "!newData.exists() || (newData.child('x').isNumber() && newData.child('x').val() >= 0 && newData.child('x').val() <= 20000 && newData.child('y').isNumber() && newData.child('y').val() >= 0 && newData.child('y').val() <= 20000 && newData.child('hp').isNumber() && newData.child('hp').val() >= 0 && newData.child('hp').val() <= 1000 && newData.child('mhp').isNumber() && newData.child('mhp').val() >= 1 && newData.child('mhp').val() <= 1000)"
+          }
+        },
+        "bots": {
+          ".write": "auth != null && data.parent().child('hostUid').val() === auth.uid"
+        },
+        "world": {
+          ".write": "auth != null && data.parent().child('hostUid').val() === auth.uid"
+        },
+        "intents": {
+          "$intentId": {
+            ".write": "auth != null && data.parent().parent().child('members').child(auth.uid).exists() && (!newData.exists() || newData.child('src').val() === auth.uid)",
+            ".validate": "!newData.exists() || (newData.child('ts').isNumber() && newData.child('ts').val() >= now - 10000 && newData.child('ts').val() <= now + 10000)"
+          }
+        },
+        "fx": {
+          "$fxId": {
+            ".write": "auth != null && data.parent().parent().child('members').child(auth.uid).exists() && (!newData.exists() || newData.child('src').val() === auth.uid)"
+          }
+        }
+      }
+    }
+  }
+}

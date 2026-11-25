@@ -1,0 +1,240 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Default-Deny Catch-All Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ==========================================
+    // HARDENED GLOBAL PRIMITIVES
+    // ==========================================
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidChampion(champ) {
+      return champ is string && champ in ['BERSERKER', 'TIDECALLER', 'SHADOW'];
+    }
+
+    function isValidDisplayName(name) {
+      return name is string
+        && name.size() >= 3
+        && name.size() <= 12
+        && name.matches('^[a-zA-Z0-9_]+$')
+        && !name.lower().matches('^(admin|system|warbrite|dev).*');
+    }
+
+    function isValidLowerName(name) {
+      return name is string
+        && name.size() >= 3
+        && name.size() <= 12
+        && name.matches('^[a-z0-9_]+$')
+        && !name.matches('^(admin|system|warbrite|dev).*');
+    }
+
+    function isValidFriendCode(code) {
+      return code is string && code.size() == 8 && code.matches('^ARC-[A-HJ-NP-Z2-9]{4}$');
+    }
+
+    function isValidAuthProvider(prov) {
+      return prov is string && prov in ['password', 'google', 'anonymous'];
+    }
+
+    function isValidUnlockedChampions(listVal) {
+      return listVal is list
+        && listVal.size() >= 1
+        && listVal.size() <= 5
+        && listVal[0] is string
+        && listVal.hasOnly(['BERSERKER', 'TIDECALLER', 'SHADOW']);
+    }
+
+    function isValidCareerStats(stats) {
+      return stats is map
+        && stats.keys().hasAll(['wins', 'elims', 'matches'])
+        && stats.keys().hasOnly(['wins', 'elims', 'matches', 'damageDealt', 'revives', 'top10'])
+        && stats.wins is int && stats.wins >= 0 && stats.wins <= 1000000
+        && stats.elims is int && stats.elims >= 0 && stats.elims <= 5000000
+        && stats.matches is int && stats.matches >= 0 && stats.matches <= 1000000
+        && (!('damageDealt' in stats) || (stats.damageDealt is int && stats.damageDealt >= 0 && stats.damageDealt <= 999999999))
+        && (!('revives' in stats) || (stats.revives is int && stats.revives >= 0 && stats.revives <= 1000000))
+        && (!('top10' in stats) || (stats.top10 is int && stats.top10 >= 0 && stats.top10 <= 1000000));
+    }
+
+    function isValidOptionalList(data, key, maxLen) {
+      return !(key in data) || (data[key] is list && data[key].size() <= maxLen);
+    }
+
+    function isValidOptionalMap(data, key, maxKeys) {
+      return !(key in data) || (data[key] is map && data[key].keys().size() <= maxKeys);
+    }
+
+    function isValidStatTiers(tiers) {
+      return tiers is map
+        && tiers.keys().hasOnly(['PWR', 'FOC', 'AGI', 'VIT', 'maxHealth', 'movementSpeed', 'attackPower'])
+        && (!('PWR' in tiers) || (tiers.PWR is int && tiers.PWR >= 0 && tiers.PWR <= 25))
+        && (!('FOC' in tiers) || (tiers.FOC is int && tiers.FOC >= 0 && tiers.FOC <= 25))
+        && (!('AGI' in tiers) || (tiers.AGI is int && tiers.AGI >= 0 && tiers.AGI <= 25))
+        && (!('VIT' in tiers) || (tiers.VIT is int && tiers.VIT >= 0 && tiers.VIT <= 25))
+        && (!('maxHealth' in tiers) || (tiers.maxHealth is int && tiers.maxHealth >= 0 && tiers.maxHealth <= 25))
+        && (!('movementSpeed' in tiers) || (tiers.movementSpeed is int && tiers.movementSpeed >= 0 && tiers.movementSpeed <= 25))
+        && (!('attackPower' in tiers) || (tiers.attackPower is int && tiers.attackPower >= 0 && tiers.attackPower <= 25));
+    }
+
+    function isValidOptionalStringOrNull(data, key, maxLen) {
+      return !(key in data) || data[key] == null || (data[key] is string && data[key].size() <= maxLen);
+    }
+
+    // ==========================================
+    // VALIDATION BLUEPRINT: USER PROFILE
+    // ==========================================
+    function isValidUserProfile(data) {
+      return data.keys().hasAll([
+          'uid', 'displayName', 'displayNameLower', 'friendCode', 'authProvider',
+          'isPublic', 'level', 'xp', 'coins', 'crystals', 'gems',
+          'unlockedChampions', 'selectedChampion', 'careerStats', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid', 'displayName', 'displayNameLower', 'friendCode', 'authProvider',
+          'isPublic', 'level', 'xp', 'coins', 'crystals', 'gems',
+          'unlockedChampions', 'selectedChampion', 'unlockedRunes', 'equippedRune',
+          'unlockedTrails', 'equippedTrail', 'statTiers', 'careerStats', 'hudLayouts',
+          'createdAtMs', 'updatedAtMs', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.uid)
+        && data.uid == request.auth.uid
+        && isValidDisplayName(data.displayName)
+        && isValidLowerName(data.displayNameLower)
+        && isValidFriendCode(data.friendCode)
+        && isValidAuthProvider(data.authProvider)
+        && data.isPublic is bool
+        && data.level is int && data.level >= 1 && data.level <= 100
+        && data.xp is int && data.xp >= 0 && data.xp <= 10000000
+        && data.coins is int && data.coins >= 0 && data.coins <= 999999999
+        && data.crystals is int && data.crystals >= 0 && data.crystals <= 999999999
+        && data.gems is int && data.gems >= 0 && data.gems <= 999999999
+        && isValidUnlockedChampions(data.unlockedChampions)
+        && isValidChampion(data.selectedChampion)
+        && isValidOptionalList(data, 'unlockedRunes', 12)
+        && isValidOptionalStringOrNull(data, 'equippedRune', 32)
+        && isValidOptionalList(data, 'unlockedTrails', 12)
+        && isValidOptionalStringOrNull(data, 'equippedTrail', 32)
+        && (!('statTiers' in data) || isValidStatTiers(data.statTiers))
+        && isValidCareerStats(data.careerStats)
+        && isValidOptionalMap(data, 'hudLayouts', 4)
+        && (!('createdAtMs' in data) || (data.createdAtMs is int && data.createdAtMs >= 0))
+        && (!('updatedAtMs' in data) || (data.updatedAtMs is int && data.updatedAtMs >= 0))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // ==========================================
+    // COLLECTION: /users/{userId}
+    // ==========================================
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (isOwner(userId) || resource.data.isPublic == true);
+      allow list: if isSignedIn() && resource.data.isPublic == true && request.query.limit <= 50;
+      allow create: if isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(request.resource.data)
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+      allow update: if isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(request.resource.data)
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.friendCode == resource.data.friendCode
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.updatedAt == request.time
+        // PRODUCTION LAUNCH: tighten to 2500 coins / 0 direct gem grants once DEV_DEMO_ENABLED = false and server IAP is live
+        && (request.resource.data.coins - resource.data.coins) <= 10000
+        && (request.resource.data.crystals - resource.data.crystals) <= 10000
+        && (request.resource.data.gems - resource.data.gems) <= 10000
+        && (request.resource.data.xp - resource.data.xp) <= 2500
+        && (request.resource.data.careerStats.wins - resource.data.careerStats.wins) <= 1
+        && (request.resource.data.careerStats.elims - resource.data.careerStats.elims) <= 49
+        && (!('createdAtMs' in resource.data) || request.resource.data.createdAtMs == resource.data.createdAtMs);
+      allow delete: if isValidId(userId) && isOwner(userId);
+
+      // Mutual Friends Subcollection
+      match /friends/{friendUid} {
+        allow get, list: if isValidId(userId) && isOwner(userId);
+        allow create: if isSignedIn()
+          && isValidId(userId)
+          && isValidId(friendUid)
+          && userId != friendUid
+          && (request.auth.uid == userId || request.auth.uid == friendUid)
+          && incoming().keys().hasAll(['uid', 'displayName', 'friendCode', 'since'])
+          && incoming().keys().hasOnly(['uid', 'displayName', 'friendCode', 'since'])
+          && incoming().uid == friendUid
+          && isValidDisplayName(incoming().displayName)
+          && incoming().friendCode is string && incoming().friendCode.size() <= 12
+          && incoming().since == request.time;
+        allow update: if false;
+        allow delete: if isSignedIn()
+          && isValidId(userId)
+          && isValidId(friendUid)
+          && (request.auth.uid == userId || request.auth.uid == friendUid);
+      }
+
+      // Incoming Friend Requests Subcollection
+      match /friendRequests/{fromUid} {
+        allow get: if isSignedIn()
+          && isValidId(userId)
+          && isValidId(fromUid)
+          && (request.auth.uid == userId || request.auth.uid == fromUid);
+        allow list: if isValidId(userId) && isOwner(userId);
+        allow create: if isSignedIn()
+          && isValidId(userId)
+          && isValidId(fromUid)
+          && request.auth.uid == fromUid
+          && userId != fromUid
+          && incoming().keys().hasAll(['fromUid', 'fromName', 'fromCode', 'createdAt'])
+          && incoming().keys().hasOnly(['fromUid', 'fromName', 'fromCode', 'createdAt'])
+          && incoming().fromUid == request.auth.uid
+          && isValidDisplayName(incoming().fromName)
+          && incoming().fromCode is string && incoming().fromCode.size() <= 12
+          && incoming().createdAt == request.time;
+        allow update: if false;
+        allow delete: if isSignedIn()
+          && isValidId(userId)
+          && isValidId(fromUid)
+          && (request.auth.uid == userId || request.auth.uid == fromUid);
+      }
+    }
+
+    // ==========================================
+    // COLLECTION: /friendCodes/{code} (IMMUTABLE)
+    // ==========================================
+    match /friendCodes/{code} {
+      allow get: if isSignedIn() && isValidFriendCode(code);
+      allow list: if false;
+      allow create: if isSignedIn()
+        && isValidFriendCode(code)
+        && !exists(/databases/$(database)/documents/friendCodes/$(code))
+        && incoming().keys().hasAll(['uid', 'displayName', 'createdAt'])
+        && incoming().keys().hasOnly(['uid', 'displayName', 'createdAt'])
+        && incoming().uid == request.auth.uid
+        && isValidDisplayName(incoming().displayName)
+        && incoming().createdAt == request.time;
+      allow update, delete: if false;
+    }
+  }
+}
