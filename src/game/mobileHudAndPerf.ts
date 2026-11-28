@@ -150,3 +150,42 @@ export function stepDistantBotAiClock(
   }
   return { shouldTick: false, stepDt: 0, nextAccumulator: next };
 }
+
+export interface MobileQualityEnv {
+  width?: number;
+  height?: number;
+  hasCoarsePointer?: boolean;
+  maxTouchPoints?: number;
+  userAgent?: string;
+  deviceMemory?: number;
+}
+
+export function resolveDefaultGraphicsQuality(
+  env: MobileQualityEnv = {}
+): 'low' | 'medium' | 'high' {
+  const ua = String(env.userAgent || '');
+  const isMobileUa = /Android|iPhone|iPad|iPod|Mobile|webOS|BlackBerry/i.test(ua);
+  const width = Number(env.width) || 0;
+  const height = Number(env.height) || 0;
+  const isCompactViewport = width > 0 && height > 0 && Math.max(width, height) <= 960;
+  const isTouch = Boolean(env.hasCoarsePointer) || (Number(env.maxTouchPoints) || 0) > 0;
+  const mem = Number(env.deviceMemory);
+  const isLowRam = Number.isFinite(mem) && mem > 0 && mem <= 4;
+
+  if (isMobileUa || isCompactViewport || isTouch || isLowRam) {
+    return 'low';
+  }
+  return 'high';
+}
+
+export function getParticlePoolCapForQuality(quality: 'low' | 'medium' | 'high' | string): number {
+  if (quality === 'low') return 32;
+  if (quality === 'medium') return 72;
+  return 140;
+}
+
+export function getCloudLayerCountForQuality(quality: 'low' | 'medium' | 'high' | string): number {
+  if (quality === 'low') return 1;
+  return 2;
+}
+

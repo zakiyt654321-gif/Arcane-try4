@@ -7489,6 +7489,22 @@
         return Math.abs(entity.x - Camera.x) <= halfW && Math.abs(entity.y - Camera.y) <= halfH;
       }
 
+      function getDefaultGraphicsQuality() {
+        try {
+          const ua = (typeof navigator !== 'undefined' && navigator.userAgent) ? navigator.userAgent : '';
+          const isMobileUa = /Android|iPhone|iPad|iPod|Mobile|webOS|BlackBerry/i.test(ua);
+          const w = typeof window !== 'undefined' ? (window.innerWidth || 0) : 0;
+          const h = typeof window !== 'undefined' ? (window.innerHeight || 0) : 0;
+          const isCompactViewport = w > 0 && h > 0 && Math.max(w, h) <= 960;
+          const isTouch = (typeof navigator !== 'undefined' && (navigator.maxTouchPoints || 0) > 0)
+            || (typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches);
+          const mem = (typeof navigator !== 'undefined' && Number(navigator.deviceMemory)) || 0;
+          const isLowRam = mem > 0 && mem <= 4;
+          if (isMobileUa || isCompactViewport || isTouch || isLowRam) return 'low';
+        } catch (_) {}
+        return 'high';
+      }
+
       const PlayerData = {
         playerName: "Player",
         autoAimEnabled: true,
@@ -7524,7 +7540,7 @@
         quickMuted: false,
         haptics: true,
         reducedMotion: false,
-        graphicsQuality: 'high',
+        graphicsQuality: getDefaultGraphicsQuality(),
         autoLoot: true,
         batterySaver30Fps: false,
         orientationPref: 'auto',
@@ -7601,7 +7617,7 @@
           const systemReducedMotion = typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
           this.reducedMotion = typeof source.reducedMotion === 'boolean' ? source.reducedMotion : systemReducedMotion;
           document.documentElement.classList.toggle('reduce-motion', this.reducedMotion);
-          this.graphicsQuality = ['low', 'medium', 'high'].includes(source.graphicsQuality) ? source.graphicsQuality : 'high';
+          this.graphicsQuality = ['low', 'medium', 'high'].includes(source.graphicsQuality) ? source.graphicsQuality : getDefaultGraphicsQuality();
           this.autoLoot = typeof source.autoLoot === 'boolean' ? source.autoLoot : true;
           this.batterySaver30Fps = typeof source.batterySaver30Fps === 'boolean' ? source.batterySaver30Fps : false;
           this.orientationPref = ['auto', 'landscape', 'portrait'].includes(source.orientationPref) ? source.orientationPref : 'auto';
@@ -7799,7 +7815,7 @@
           const { width, height } = this.getViewportSize();
           const pref = (typeof PlayerData !== 'undefined' && PlayerData.orientationPref) || 'auto';
           const orientation = pref === 'landscape' ? 'landscape' : (pref === 'portrait' ? 'portrait' : (height > width ? 'portrait' : 'landscape'));
-          const quality = ['low', 'medium', 'high'].includes(PlayerData.graphicsQuality) ? PlayerData.graphicsQuality : 'high';
+          const quality = ['low', 'medium', 'high'].includes(PlayerData.graphicsQuality) ? PlayerData.graphicsQuality : getDefaultGraphicsQuality();
           const profile = orientation === 'portrait' ? 'mobile-portrait' : 'mobile-landscape';
           const detectedProfile = height > width ? 'mobile-portrait' : 'mobile-landscape';
           const modePref = 'mobile';
@@ -7821,7 +7837,7 @@
             ? Math.round(Math.max(0.8, Math.min(1.05, 0.88 * userScale)) * 100) / 100
             : Math.round(Math.max(0.82, Math.min(1.05, 0.9 * userScale)) * 100) / 100;
 
-          const dprCap = quality === 'low' ? 1.0 : (quality === 'medium' ? 1.5 : 2.0);
+          const dprCap = quality === 'low' ? 1.0 : (quality === 'medium' ? 1.25 : 1.5);
           const targetCombatSpan = profile === 'mobile-portrait' ? 540 : 560;
 
           let minimapSize, minimapX, minimapY;
@@ -7871,7 +7887,7 @@
           root.dataset.deviceProfile = cfg.profile;
           root.dataset.deviceMode = 'mobile';
           root.dataset.touchControls = 'on';
-          root.dataset.graphicsQuality = PlayerData.graphicsQuality || 'high';
+          root.dataset.graphicsQuality = PlayerData.graphicsQuality || getDefaultGraphicsQuality();
           root.style.setProperty('--control-scale', String(cfg.controlScale));
           root.style.setProperty('--hud-scale', String(cfg.hudScale));
 
@@ -9165,7 +9181,11 @@
         buffers: {},
         groundPattern: null,
         biomeTileCanvases: {},
+        biomeTilePatterns: {},
         slicedProps: {},
+        tileVersion: 0,
+        _fogPattern: null,
+        _fogPatternImg: null,
         proceduralTilesBuilt: false,
         proceduralPropsBuilt: false,
         failed: new Set(),
@@ -9192,55 +9212,95 @@
           { key: 'bgm_climax', type: 'audio', path: '/assets/arcane/audio/storm-climax.mp3' }
         ],
 
+        _ensureBiomeTilePattern(tileKey) {
+          const canvas = this.biomeTileCanvases[tileKey];
+          if (!canvas) return null;
+          if (!this._patternCtx) {
+            const pCanvas = document.createElement('canvas');
+            pCanvas.width = 1;
+            pCanvas.height = 1;
+            this._patternCtx = pCanvas.getContext('2d');
+          }
+          if (this._patternCtx && typeof this._patternCtx.createPattern === 'function') {
+            try {
+              this.biomeTilePatterns[tileKey] = this._patternCtx.createPattern(canvas, 'repeat');
+            } catch (_) {
+              this.biomeTilePatterns[tileKey] = null;
+            }
+          }
+          return this.biomeTilePatterns[tileKey] || null;
+        },
+
         processIsland25DAssets() {
           const mod = window.__AR_ISLAND_25D__;
           if (!mod) return;
+          let invalidated = false;
           if (!this.proceduralTilesBuilt) {
             const procTiles = mod.createProceduralBiomeTiles();
-            for (const [k, canvas] of Object.entries(procTiles)) {
-              if (!this.biomeTileCanvases[k]) this.biomeTileCanvases[k] = canvas;
+            const procEntries = Object.entries(procTiles);
+            for (let i = 0; i < procEntries.length; i++) {
+              const k = procEntries[i][0];
+              const canvas = procEntries[i][1];
+              if (!this.biomeTileCanvases[k]) {
+                this.biomeTileCanvases[k] = canvas;
+                this._ensureBiomeTilePattern(k);
+              }
             }
             this.proceduralTilesBuilt = true;
+            invalidated = true;
           }
           if (!this.proceduralPropsBuilt) {
             const procProps = mod.createProceduralPropSprites();
-            for (const [k, sprite] of Object.entries(procProps)) {
+            const propEntries = Object.entries(procProps);
+            for (let i = 0; i < propEntries.length; i++) {
+              const k = propEntries[i][0];
+              const sprite = propEntries[i][1];
               if (!this.slicedProps[k]) this.slicedProps[k] = sprite;
             }
             this.proceduralPropsBuilt = true;
           }
-          // Override with real PNG floor tiles if loaded
+          // Pre-scale loaded 1024x1024 biome floor tiles ONCE at boot to 256x256 offscreen canvases + cached CanvasPatterns
           const tileKeys = ['tile_citadel', 'tile_grove', 'tile_obsidian', 'tile_tidal'];
-          let invalidated = false;
+          const tileSize = mod.BIOME_TILE_CACHE_SIZE || 256;
           for (let i = 0; i < tileKeys.length; i++) {
             const tk = tileKeys[i];
             const img = this.images[tk];
-            if (img && img.complete && img.naturalWidth > 0 && this.biomeTileCanvases[tk] !== img) {
-              this.biomeTileCanvases[tk] = img;
+            if (img && img.complete && img.naturalWidth > 0 && !img._arTileScaled) {
+              const scaled = mod.createPrescaledTileCanvas ? mod.createPrescaledTileCanvas(img, tileSize) : null;
+              this.biomeTileCanvases[tk] = scaled || img;
+              this._ensureBiomeTilePattern(tk);
+              img._arTileScaled = true;
               invalidated = true;
             }
           }
-          // Slice loaded 2x2 prop sheets (20px outer margin trim + magenta/shadow strip + 1px despill + foot anchor)
+          // Slice & downscale (<= 160x160) loaded 2x2 prop sheets ONCE at boot (20px outer trim + magenta strip + 1px despill + foot anchor)
           const sheetKeys = ['props_structures', 'props_nature_loot'];
+          const maxPropDim = mod.PROP_MAX_CACHE_DIM || 160;
           for (let i = 0; i < sheetKeys.length; i++) {
             const sk = sheetKeys[i];
             const img = this.images[sk];
             if (img && img.complete && img.naturalWidth > 0 && !img._arSliced25D) {
-              const sliced = mod.slicePropSheet2x2(img, sk, mod.PROP_SHEET_OUTER_MARGIN);
-              for (const [propKey, sprite] of Object.entries(sliced)) {
+              const sliced = mod.slicePropSheet2x2(img, sk, mod.PROP_SHEET_OUTER_MARGIN, maxPropDim);
+              const slicedEntries = Object.entries(sliced);
+              for (let j = 0; j < slicedEntries.length; j++) {
+                const propKey = slicedEntries[j][0];
+                const sprite = slicedEntries[j][1];
                 if (sprite) this.slicedProps[propKey] = sprite;
               }
               img._arSliced25D = true;
               invalidated = true;
             }
           }
-          if (invalidated && typeof TerrainCache !== 'undefined' && TerrainCache.invalidate) {
-            TerrainCache.invalidate();
+          if (invalidated) {
+            this.tileVersion++;
+            if (typeof TerrainCache !== 'undefined' && TerrainCache.invalidate) {
+              TerrainCache.invalidate();
+            }
           }
         },
 
+        // Pure O(1) dictionary lookups in hot render loop (zero per-frame slicing/reprocessing)
         getBiomeTile(biomeId) {
-          this.processIsland25DAssets();
           const key = biomeId === 'CITADEL' ? 'tile_citadel'
             : biomeId === 'GROVE' ? 'tile_grove'
             : biomeId === 'OBSIDIAN' ? 'tile_obsidian'
@@ -9248,9 +9308,29 @@
           return this.biomeTileCanvases[key] || null;
         },
 
+        getBiomePattern(biomeId) {
+          const key = biomeId === 'CITADEL' ? 'tile_citadel'
+            : biomeId === 'GROVE' ? 'tile_grove'
+            : biomeId === 'OBSIDIAN' ? 'tile_obsidian'
+            : 'tile_tidal';
+          return this.biomeTilePatterns[key] || this._ensureBiomeTilePattern(key);
+        },
+
         getPropSprite(propKey) {
-          this.processIsland25DAssets();
           return this.slicedProps[propKey] || null;
+        },
+
+        getFogPattern(ctx) {
+          const fogImg = this.getFog ? this.getFog() : null;
+          if (!fogImg || !ctx || typeof ctx.createPattern !== 'function') return null;
+          if (this._fogPattern && this._fogPatternImg === fogImg) return this._fogPattern;
+          try {
+            this._fogPattern = ctx.createPattern(fogImg, 'repeat');
+            this._fogPatternImg = fogImg;
+          } catch (_) {
+            this._fogPattern = null;
+          }
+          return this._fogPattern;
         },
 
         load(onProgress) {
@@ -9846,10 +9926,10 @@
       const ARENA_HEIGHT = 20000;
 
       function getDprCapForQuality(quality) {
-        const q = quality || PlayerData.graphicsQuality || 'high';
+        const q = quality || PlayerData.graphicsQuality || getDefaultGraphicsQuality();
         if (q === 'low') return 1.0;
-        if (q === 'medium') return 1.5;
-        return 2.0;
+        if (q === 'medium') return 1.25;
+        return 1.5;
       }
 
       function resizeCanvas() {
@@ -11144,8 +11224,15 @@
         killFeedTimers.push(fadeTimer);
       }
 
-      const VIEWPORT_CULL_MARGIN = 140;
+      const VIEWPORT_CULL_MARGIN = 120;
       const DISTANT_BOT_AI_STEP = 1 / 15;
+
+      function getActiveParticlePoolLimit() {
+        const q = PlayerData.graphicsQuality || getDefaultGraphicsQuality();
+        if (q === 'low') return 32;
+        if (q === 'medium') return 72;
+        return 140;
+      }
 
       function isPointWithinCameraCull(x, y, margin = VIEWPORT_CULL_MARGIN) {
         const zoom = (typeof Camera !== 'undefined' && Camera.getZoom) ? Camera.getZoom() : 1;
@@ -11159,8 +11246,9 @@
         if (Game.state === 'PLAYING' && !isPointWithinCameraCull(x, y, VIEWPORT_CULL_MARGIN)) return;
         const qualityScale = PlayerData.graphicsQuality === 'low' ? 0.45 : (PlayerData.graphicsQuality === 'medium' ? 0.72 : 1);
         count = Math.max(1, Math.round(count * qualityScale));
+        const poolLimit = Math.min(particlePool.length, getActiveParticlePoolLimit());
         let spawned = 0;
-        for (let i = 0; i < particlePool.length && spawned < count; i++) {
+        for (let i = 0; i < poolLimit && spawned < count; i++) {
           const pt = particlePool[i];
           if (!pt.active) {
             pt.active = true;
@@ -11179,17 +11267,19 @@
         }
       }
 
+      const ELEMENTAL_SOUL_PALETTES = {
+        BERSERKER: ['#fb923c', '#f97316', '#fde047'],
+        TIDECALLER: ['#38bdf8', '#7dd3fc', '#e0f2fe'],
+        SHADOW: ['#a855f7', '#c084fc', '#818cf8']
+      };
+
       function spawnElementalSoulParticles(x, y, charKey) {
         if (Game.state === 'PLAYING' && !isPointWithinCameraCull(x, y, VIEWPORT_CULL_MARGIN)) return;
-        const palettes = {
-          BERSERKER: ['#fb923c', '#f97316', '#fde047'],
-          TIDECALLER: ['#38bdf8', '#7dd3fc', '#e0f2fe'],
-          SHADOW: ['#a855f7', '#c084fc', '#818cf8']
-        };
-        const colors = palettes[charKey] || palettes.SHADOW;
-        const desired = PlayerData.graphicsQuality === 'low' ? 14 : 16;
+        const colors = ELEMENTAL_SOUL_PALETTES[charKey] || ELEMENTAL_SOUL_PALETTES.SHADOW;
+        const desired = PlayerData.graphicsQuality === 'low' ? 8 : (PlayerData.graphicsQuality === 'medium' ? 12 : 16);
+        const poolLimit = Math.min(particlePool.length, getActiveParticlePoolLimit());
         let spawned = 0;
-        for (let i = 0; i < particlePool.length && spawned < desired; i++) {
+        for (let i = 0; i < poolLimit && spawned < desired; i++) {
           const pt = particlePool[i];
           if (!pt.active) {
             pt.active = true;
@@ -12292,12 +12382,21 @@
 
         ctx.save();
         if (frame[2]) ctx.scale(-1, 1);
-        if (hitFlash > 0 && 'filter' in ctx) ctx.filter = 'brightness(0) invert(1)';
         ctx.drawImage(
           spriteSheet,
           sx, sy, sw, sh,
           -drawW / 2, -drawH / 2, drawW, drawH
         );
+        // Zero-filter additive hit flash (avoids expensive ctx.filter on mobile GPUs)
+        if (hitFlash > 0) {
+          ctx.globalCompositeOperation = 'lighter';
+          ctx.globalAlpha = 0.65;
+          ctx.drawImage(
+            spriteSheet,
+            sx, sy, sw, sh,
+            -drawW / 2, -drawH / 2, drawW, drawH
+          );
+        }
         ctx.restore();
 
         ctx.restore();
@@ -15208,11 +15307,10 @@
           if (Game.state === 'DROPPING') return;
           ctx.save();
           // FIX #9: +10px inner hole clearance so lightning noise is never clipped by fog
-          const fogImg = typeof AssetLoader !== 'undefined' ? AssetLoader.getFog() : null;
-          if (fogImg && PlayerData.graphicsQuality !== 'low') {
-            // First pass alpha 0.55
-            const pat1 = ctx.createPattern(fogImg, 'repeat');
-            ctx.fillStyle = pat1;
+          const fogPat = (typeof AssetLoader !== 'undefined' && AssetLoader.getFogPattern) ? AssetLoader.getFogPattern(ctx) : null;
+          if (fogPat && PlayerData.graphicsQuality !== 'low') {
+            // First pass alpha 0.55 (reusing cached CanvasPattern — zero per-frame allocation)
+            ctx.fillStyle = fogPat;
             ctx.globalAlpha = 0.55;
             ctx.beginPath();
             ctx.rect(0, 0, ARENA_WIDTH, ARENA_HEIGHT);
@@ -15223,8 +15321,7 @@
             ctx.save();
             const scroll = (Game.time * 12) % 512;
             ctx.translate(scroll, scroll);
-            const pat2 = ctx.createPattern(fogImg, 'repeat');
-            ctx.fillStyle = pat2;
+            ctx.fillStyle = fogPat;
             ctx.globalAlpha = 0.28;
             ctx.beginPath();
             ctx.rect(-scroll, -scroll, ARENA_WIDTH, ARENA_HEIGHT);
@@ -16478,34 +16575,39 @@
       // ==========================================
       // OFFSCREEN 4-BIOME 2.5D TERRAIN CHUNK CACHE (60 FPS MOBILE)
       // ==========================================
+      const BIOME_FALLBACK_COLORS = {
+        CITADEL: '#8f836e',
+        GROVE: '#244d38',
+        OBSIDIAN: '#1d1620',
+        TIDAL: '#17374f'
+      };
+
       const TerrainCache = {
         chunkSize: 1024,
         pixelScale: 0.5,
         maxChunks: 28,
         chunks: new Map(),
-        fingerprint: '',
-
-        computeFingerprint() {
-          const tileSig = (typeof AssetLoader !== 'undefined' && AssetLoader.biomeTileCanvases)
-            ? ['tile_citadel', 'tile_grove', 'tile_obsidian', 'tile_tidal'].map(k => {
-                const c = AssetLoader.biomeTileCanvases[k];
-                return c ? (c.naturalWidth ? '2' : '1') : '0';
-              }).join('')
-            : '0000';
-          const hasWorld = ISLAND_WORLD_DATA ? 1 : 0;
-          return `25d|${tileSig}|${hasWorld}|${decalPool.length}`;
-        },
+        lastTileVersion: -1,
+        lastWorldReady: false,
+        lastDecalCount: -1,
 
         invalidate() {
           this.chunks.clear();
-          this.fingerprint = this.computeFingerprint();
+          this.lastTileVersion = typeof AssetLoader !== 'undefined' ? (AssetLoader.tileVersion || 0) : 0;
+          this.lastWorldReady = Boolean(ISLAND_WORLD_DATA);
+          this.lastDecalCount = decalPool.length;
+        },
+
+        _syncCacheState() {
+          const tv = typeof AssetLoader !== 'undefined' ? (AssetLoader.tileVersion || 0) : 0;
+          const wr = Boolean(ISLAND_WORLD_DATA);
+          const dc = decalPool.length;
+          if (tv !== this.lastTileVersion || wr !== this.lastWorldReady || dc !== this.lastDecalCount) {
+            this.invalidate();
+          }
         },
 
         getChunk(cx, cy) {
-          initIsland25DWorld();
-          const fp = this.computeFingerprint();
-          if (fp !== this.fingerprint) this.invalidate();
-
           const key = `${cx}_${cy}`;
           if (this.chunks.has(key)) {
             const cached = this.chunks.get(key);
@@ -16528,26 +16630,14 @@
           tctx.scale(this.pixelScale, this.pixelScale);
           tctx.translate(-wx, -wy);
 
-          // Build per-chunk CanvasPatterns for the 4 structured biome floor tiles
-          const patterns = {};
-          const fallbackColors = {
-            CITADEL: '#8f836e',
-            GROVE: '#244d38',
-            OBSIDIAN: '#1d1620',
-            TIDAL: '#17374f'
+          // Reuse pre-created boot-cached CanvasPatterns from pre-scaled 256x256 biome tiles
+          const fallbackColors = BIOME_FALLBACK_COLORS;
+          const patterns = {
+            CITADEL: typeof AssetLoader !== 'undefined' && AssetLoader.getBiomePattern ? AssetLoader.getBiomePattern('CITADEL') : null,
+            GROVE: typeof AssetLoader !== 'undefined' && AssetLoader.getBiomePattern ? AssetLoader.getBiomePattern('GROVE') : null,
+            OBSIDIAN: typeof AssetLoader !== 'undefined' && AssetLoader.getBiomePattern ? AssetLoader.getBiomePattern('OBSIDIAN') : null,
+            TIDAL: typeof AssetLoader !== 'undefined' && AssetLoader.getBiomePattern ? AssetLoader.getBiomePattern('TIDAL') : null
           };
-          const biomes = ['CITADEL', 'GROVE', 'OBSIDIAN', 'TIDAL'];
-          for (let i = 0; i < biomes.length; i++) {
-            const b = biomes[i];
-            const tileSrc = typeof AssetLoader !== 'undefined' && AssetLoader.getBiomeTile ? AssetLoader.getBiomeTile(b) : null;
-            if (tileSrc) {
-              try {
-                patterns[b] = tctx.createPattern(tileSrc, 'repeat');
-              } catch (_) {
-                patterns[b] = null;
-              }
-            }
-          }
 
           // Check if the entire chunk sits inside a single biome (fast path)
           const cTL = classifyIslandBiomeLocal(wx + 4, wy + 4);
@@ -16767,6 +16857,8 @@
         },
 
         drawVisible(ctx, viewLeft, viewTop, viewRight, viewBottom) {
+          initIsland25DWorld();
+          this._syncCacheState();
           const size = this.chunkSize;
           const maxChunkIdx = Math.ceil(ARENA_WIDTH / size) - 1;
           const minCx = Math.max(0, Math.floor(viewLeft / size));
@@ -16785,42 +16877,61 @@
       // ==========================================
       // LAYER 1: FLOATING SKY-ISLAND PARALLAX CLOUDS & CLIFF PERIMETER
       // ==========================================
+      let _cachedSkyGrad = null;
+      let _cachedSkyGradH = -1;
+
       function drawParallaxSkyClouds(ctx, w, h) {
-        const skyGrad = ctx.createLinearGradient(0, 0, 0, h);
-        skyGrad.addColorStop(0, '#071124');
-        skyGrad.addColorStop(0.55, '#102544');
-        skyGrad.addColorStop(1, '#1a3a61');
-        ctx.fillStyle = skyGrad;
+        if (!_cachedSkyGrad || _cachedSkyGradH !== h) {
+          _cachedSkyGrad = ctx.createLinearGradient(0, 0, 0, h);
+          _cachedSkyGrad.addColorStop(0, '#071124');
+          _cachedSkyGrad.addColorStop(0.55, '#102544');
+          _cachedSkyGrad.addColorStop(1, '#1a3a61');
+          _cachedSkyGradH = h;
+        }
+        ctx.fillStyle = _cachedSkyGrad;
         ctx.fillRect(0, 0, w, h);
 
-        // Slow-scrolling parallax sky clouds (camera * 0.72)
+        // Slow-scrolling parallax sky clouds (camera * 0.72) — reduced to 1 lightweight layer on Low quality
+        const isLowQuality = PlayerData.graphicsQuality === 'low';
         const drift = PlayerData.reducedMotion ? 0 : (Game.time * 14);
         const paraX = Camera.x * 0.72 + drift;
         const paraY = Camera.y * 0.72 * CAMERA_PITCH;
-        const tileW = 540;
-        const tileH = 360;
+        const tileW = isLowQuality ? 680 : 540;
+        const tileH = isLowQuality ? 420 : 360;
         const offX = -(((paraX % tileW) + tileW) % tileW);
         const offY = -(((paraY % tileH) + tileH) % tileH);
 
-        ctx.save();
+        ctx.fillStyle = 'rgba(186, 220, 255, 0.10)';
+        ctx.beginPath();
         for (let gy = offY - tileH; gy < h + tileH; gy += tileH) {
           for (let gx = offX - tileW; gx < w + tileW; gx += tileW) {
-            ctx.fillStyle = 'rgba(186, 220, 255, 0.11)';
-            ctx.beginPath();
+            ctx.moveTo(gx + 268, gy + 110);
             ctx.ellipse(gx + 140, gy + 110, 128, 42, 0, 0, Math.PI * 2);
-            ctx.ellipse(gx + 210, gy + 96, 92, 36, 0, 0, Math.PI * 2);
-            ctx.ellipse(gx + 88, gy + 118, 76, 30, 0, 0, Math.PI * 2);
-            ctx.fill();
-
-            ctx.fillStyle = 'rgba(224, 242, 254, 0.08)';
-            ctx.beginPath();
-            ctx.ellipse(gx + 400, gy + 265, 148, 46, 0, 0, Math.PI * 2);
-            ctx.ellipse(gx + 340, gy + 252, 86, 34, 0, 0, Math.PI * 2);
-            ctx.ellipse(gx + 465, gy + 272, 74, 28, 0, 0, Math.PI * 2);
-            ctx.fill();
+            if (!isLowQuality) {
+              ctx.moveTo(gx + 302, gy + 96);
+              ctx.ellipse(gx + 210, gy + 96, 92, 36, 0, 0, Math.PI * 2);
+              ctx.moveTo(gx + 164, gy + 118);
+              ctx.ellipse(gx + 88, gy + 118, 76, 30, 0, 0, Math.PI * 2);
+            }
           }
         }
-        ctx.restore();
+        ctx.fill();
+
+        if (!isLowQuality) {
+          ctx.fillStyle = 'rgba(224, 242, 254, 0.08)';
+          ctx.beginPath();
+          for (let gy = offY - tileH; gy < h + tileH; gy += tileH) {
+            for (let gx = offX - tileW; gx < w + tileW; gx += tileW) {
+              ctx.moveTo(gx + 548, gy + 265);
+              ctx.ellipse(gx + 400, gy + 265, 148, 46, 0, 0, Math.PI * 2);
+              ctx.moveTo(gx + 426, gy + 252);
+              ctx.ellipse(gx + 340, gy + 252, 86, 34, 0, 0, Math.PI * 2);
+              ctx.moveTo(gx + 539, gy + 272);
+              ctx.ellipse(gx + 465, gy + 272, 74, 28, 0, 0, Math.PI * 2);
+            }
+          }
+          ctx.fill();
+        }
       }
 
       function drawSkyIslandCliffPerimeter(ctx, viewLeft, viewTop, viewRight, viewBottom) {
@@ -16905,16 +17016,22 @@
         ctx.restore();
       }
 
+      const PROP_TARGET_HEIGHT_MAP = { pillar: 126, wall: 102, obelisk: 146, tree: 162, boulder: 96 };
+      const LOOT_ICON_MAP = { GOLD: '🪙', GEMS: '💎', XP: '⚡', MEDKIT: '✚', MANA: '◆', SHIELD: '⬡', HASTE: '➤', BOMB: '✹' };
+
       function drawUprightPropSprite(ctx, sprite, x, y, scale = 1.0, flipX = false, flash = false) {
         if (!sprite || !sprite.canvas) return false;
         ctx.save();
         ctx.translate(Math.round(x), Math.round(y));
         // Un-squash 0.72 ground tilt so every 2.5D prop stands upright at full 1.0 vertical height anchored at its feet!
         ctx.scale(flipX ? -scale : scale, INV_CAMERA_PITCH * scale);
-        if (flash) {
-          ctx.filter = 'brightness(1.75)';
-        }
         ctx.drawImage(sprite.canvas, -sprite.anchorX, -sprite.anchorY, sprite.width, sprite.height);
+        // Zero-filter additive hit flash (avoids expensive ctx.filter on mobile GPUs)
+        if (flash) {
+          ctx.globalCompositeOperation = 'lighter';
+          ctx.globalAlpha = 0.52;
+          ctx.drawImage(sprite.canvas, -sprite.anchorX, -sprite.anchorY, sprite.width, sprite.height);
+        }
         ctx.restore();
         return true;
       }
@@ -17105,35 +17222,35 @@
           }
         }
 
-        // LAYER 3: Particle Effects
-        for (let i = 0; i < particlePool.length; i++) {
+        // LAYER 3: Particle Effects (batched single save/restore, capped pool)
+        const activeParticleLimit = Math.min(particlePool.length, getActiveParticlePoolLimit());
+        CTX.save();
+        for (let i = 0; i < activeParticleLimit; i++) {
           const pt = particlePool[i];
           if (!pt.active || pt.x < viewLeft || pt.x > viewRight || pt.y < viewTop || pt.y > viewBottom) continue;
-          CTX.save();
-          const curAlpha = Math.max(0, pt.alpha);
+          const curAlpha = pt.alpha > 0 ? pt.alpha : 0;
+          if (curAlpha <= 0.01) continue;
           CTX.globalAlpha = curAlpha;
           CTX.fillStyle = pt.color;
           const drawRadius = Math.max(0.6, pt.radius * (0.35 + 0.65 * curAlpha));
           CTX.beginPath();
           CTX.arc(pt.x, pt.y, drawRadius, 0, Math.PI * 2);
           CTX.fill();
-          CTX.restore();
         }
+        CTX.restore();
 
-        // Ambient Embers (Part E.2)
+        // Ambient Embers (Part E.2 — batched save/restore + frustum culled)
         if (PlayerData.graphicsQuality !== 'low') {
           CTX.save();
           CTX.globalCompositeOperation = 'lighter';
+          CTX.fillStyle = '#f59e0b';
           for (let i = 0; i < MAX_EMBERS; i++) {
             const em = emberPool[i];
-            if (!em.active) continue;
-            CTX.save();
+            if (!em.active || em.x < viewLeft || em.x > viewRight || em.y < viewTop || em.y > viewBottom) continue;
             CTX.globalAlpha = em.alpha;
-            CTX.fillStyle = '#f59e0b';
             CTX.beginPath();
             CTX.arc(em.x, em.y, em.radius, 0, Math.PI * 2);
             CTX.fill();
-            CTX.restore();
           }
           CTX.restore();
         }
@@ -17287,12 +17404,11 @@
         }
 
         // LAYER 3 (UPRIGHT 1.0 HEIGHT Y-SORTED WORLD PASS):
-        // All 2.5D props, destructible chests/barrels, supply crates, loot, and fighters
-        // sorted strictly by bottom footY so characters walk cleanly in front of and behind props!
+        // Viewport frustum-culled (120px margin in viewLeft..viewBottom) before entering pre-allocated worldSortQueue!
         let sortCount = 0;
         for (let i = 0; i < obstaclePool.length && sortCount < MAX_YSORT_ITEMS; i++) {
           const obs = obstaclePool[i];
-          if (obs.x + obs.w > viewLeft && obs.x < viewRight && obs.y + obs.h > viewTop && obs.y - (obs.zHeight || 30) < viewBottom) {
+          if (obs.x + obs.w >= viewLeft && obs.x <= viewRight && obs.y + obs.h >= viewTop && obs.y - (obs.zHeight || 30) <= viewBottom) {
             const slot = worldSortQueue[sortCount++];
             slot.kind = 1;
             slot.sortY = obs.y + obs.h;
@@ -17302,7 +17418,8 @@
         if (typeof islandStaticProps !== 'undefined') {
           for (let i = 0; i < islandStaticProps.length && sortCount < MAX_YSORT_ITEMS; i++) {
             const sp = islandStaticProps[i];
-            if (sp.x + 180 > viewLeft && sp.x - 180 < viewRight && sp.y + 120 > viewTop && sp.y - 260 < viewBottom) {
+            // viewLeft..viewBottom already include the 120px viewport frustum margin
+            if (sp.x >= viewLeft && sp.x <= viewRight && sp.y >= viewTop && sp.y <= viewBottom) {
               const slot = worldSortQueue[sortCount++];
               slot.kind = 6;
               slot.sortY = sp.footY;
@@ -17313,7 +17430,7 @@
         for (let i = 0; i < MAX_LOOT && sortCount < MAX_YSORT_ITEMS; i++) {
           const l = lootPool[i];
           if (!l.active) continue;
-          if (l.x > viewLeft && l.x < viewRight && l.y > viewTop && l.y < viewBottom) {
+          if (l.x >= viewLeft && l.x <= viewRight && l.y >= viewTop && l.y <= viewBottom) {
             const slot = worldSortQueue[sortCount++];
             slot.kind = 2;
             slot.sortY = l.y;
@@ -17323,7 +17440,7 @@
         for (let i = 0; i < MAX_SUPPLY_CRATES && sortCount < MAX_YSORT_ITEMS; i++) {
           const c = supplyCratePool[i];
           if (!c.active) continue;
-          if (c.x + 60 > viewLeft && c.x - 60 < viewRight && c.y + 60 > viewTop && c.y - 560 < viewBottom) {
+          if (c.x >= viewLeft && c.x <= viewRight && c.y >= viewTop && c.y - (c.z || 0) <= viewBottom) {
             const slot = worldSortQueue[sortCount++];
             slot.kind = 3;
             slot.sortY = c.y;
@@ -17333,7 +17450,7 @@
         for (let i = 0; i < MAX_DESTRUCTIBLES && sortCount < MAX_YSORT_ITEMS; i++) {
           const prop = destructiblePropPool[i];
           if (!prop.active) continue;
-          if (prop.x + 90 > viewLeft && prop.x - 90 < viewRight && prop.y + 90 > viewTop && prop.y - 160 < viewBottom) {
+          if (prop.x >= viewLeft && prop.x <= viewRight && prop.y >= viewTop && prop.y <= viewBottom) {
             const slot = worldSortQueue[sortCount++];
             slot.kind = 5;
             slot.sortY = prop.y;
@@ -17391,9 +17508,8 @@
               ? AssetLoader.getPropSprite(sp.spriteKey)
               : null;
             if (sprite) {
-              // Normalize target rendered height to match world collision footprint nicely
-              const targetHeightMap = { pillar: 126, wall: 102, obelisk: 146, tree: 162, boulder: 96 };
-              const targetH = (targetHeightMap[sp.spriteKey] || 112) * sp.drawScale;
+              // Normalize target rendered height using hoisted constant map (zero per-frame allocations)
+              const targetH = (PROP_TARGET_HEIGHT_MAP[sp.spriteKey] || 112) * sp.drawScale;
               const s = targetH / Math.max(1, sprite.height);
               drawUprightPropSprite(CTX, sprite, sp.x, sp.y, s, sp.flipX, false);
             }
@@ -17447,8 +17563,7 @@
               CTX.font = '15px system-ui, sans-serif';
               CTX.textAlign = 'center';
               CTX.textBaseline = 'middle';
-              const icons = { GOLD: '🪙', GEMS: '💎', XP: '⚡', MEDKIT: '✚', MANA: '◆', SHIELD: '⬡', HASTE: '➤', BOMB: '✹' };
-              const icon = icons[l.type] || '•';
+              const icon = LOOT_ICON_MAP[l.type] || '•';
               CTX.fillStyle = l.type === 'XP' ? '#0f172a' : '#ffffff';
               CTX.fillText(icon, 0, 0);
             }
@@ -20574,6 +20689,7 @@
       function setGraphicsQuality(q) {
         if (!['low', 'medium', 'high'].includes(q)) return;
         PlayerData.graphicsQuality = q;
+        PlayerData.save();
         updateQualityButtonsUI();
         DeviceOptimizer.apply(true);
       }
@@ -20601,7 +20717,7 @@
       }
 
       function updateQualityButtonsUI() {
-        const q = PlayerData.graphicsQuality || 'high';
+        const q = PlayerData.graphicsQuality || getDefaultGraphicsQuality();
         ['low', 'medium', 'high'].forEach(k => {
           const b = document.getElementById('qual-btn-' + k);
           if (b) {

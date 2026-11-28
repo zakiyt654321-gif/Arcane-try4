@@ -3,8 +3,11 @@ import assert from 'node:assert/strict';
 import {
   clampFrameDeltaTime,
   computeMobileDprCap,
+  getCloudLayerCountForQuality,
+  getParticlePoolCapForQuality,
   isPointInCancelZone,
   isWithinViewportCullBounds,
+  resolveDefaultGraphicsQuality,
   selectQuickUseInventoryItem,
   stepDistantBotAiClock,
 } from './mobileHudAndPerf';
@@ -77,3 +80,34 @@ test('stepDistantBotAiClock ticks on-screen bots at 60Hz and distant off-screen 
   }
   assert.equal(ticks, 15, `expected 15Hz distant bot ticks over 60 frames, got ${ticks}`);
 });
+
+test('resolveDefaultGraphicsQuality defaults to low on 4GB Android / mobile devices with capped particles & clouds', () => {
+  // 4 GB RAM Android phone -> defaults to low (DPR = 1.0)
+  const android4Gb = resolveDefaultGraphicsQuality({
+    width: 844,
+    height: 390,
+    hasCoarsePointer: true,
+    maxTouchPoints: 5,
+    userAgent: 'Mozilla/5.0 (Linux; Android 13; Pixel 6a) AppleWebKit/537.36 Mobile Safari/537.36',
+    deviceMemory: 4
+  });
+  assert.equal(android4Gb, 'low');
+  assert.equal(computeMobileDprCap(2.75, android4Gb), 1.0);
+  assert.equal(getCloudLayerCountForQuality(android4Gb), 1);
+  assert.ok(getParticlePoolCapForQuality('low') < getParticlePoolCapForQuality('medium'));
+  assert.ok(getParticlePoolCapForQuality('medium') < getParticlePoolCapForQuality('high'));
+
+  // High-RAM desktop browser -> defaults to high (DPR cap 1.5)
+  const desktop = resolveDefaultGraphicsQuality({
+    width: 1920,
+    height: 1080,
+    hasCoarsePointer: false,
+    maxTouchPoints: 0,
+    userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36',
+    deviceMemory: 16
+  });
+  assert.equal(desktop, 'high');
+  assert.equal(computeMobileDprCap(2.0, 'medium'), 1.25);
+  assert.equal(computeMobileDprCap(2.0, 'high'), 1.5);
+});
+

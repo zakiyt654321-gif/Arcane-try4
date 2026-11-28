@@ -1,14 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   TILT_Y_SCALE,
   CAMERA_LOOKAHEAD_MAX,
   CAMERA_ACTION_ZOOM,
   PROP_SHEET_OUTER_MARGIN,
+  PROP_MAX_CACHE_DIM,
+  BIOME_TILE_CACHE_SIZE,
+  FRUSTUM_CULL_MARGIN_PX,
+  PROP_CACHE_MAX_DIMS,
   WORLD_VISION_CAP,
   ISLAND_MAP_MANIFEST,
   PROP_SHEET_QUADRANTS,
   compute2x2QuadrantRects,
+  computeDownscaledSpriteDimensions,
+  isWithinFrustum120,
+  insertionSortQueueByFootY,
   isBrightMagentaPixel,
   isDarkMagentaShadowPixel,
   stripMagentaAndDespillRGBA,
@@ -309,3 +318,54 @@ test('Part B: Deterministic 4-biome island layout, Y-sort ordering by footY, and
   assert.equal(isWithinWorldVisionCap(10000, 10000, 10521, 10000), false);
   assert.equal(isWithinWorldVisionCap(10000, 10000, 10000, 10521), false);
 });
+
+test('Mobile 60 FPS Optimization: Sliced prop cache <= 160x160, 256x256 tile cache, 120px frustum culling & zero-alloc Y-sort', () => {
+  // Prop cache caps strictly <= 160x160 and biome tile pre-scale = 256x256
+  assert.equal(PROP_MAX_CACHE_DIM, 160);
+  assert.equal(BIOME_TILE_CACHE_SIZE, 256);
+  assert.equal(FRUSTUM_CULL_MARGIN_PX, 120);
+  for (const [key, maxDim] of Object.entries(PROP_CACHE_MAX_DIMS)) {
+    assert.ok(maxDim <= 160 && maxDim >= 64, `Prop ${key} cache cap must be <= 160px, got ${maxDim}`);
+  }
+
+  // Downscaling a large 480x360 trimmed quadrant preserves aspect ratio and fits <= 160x160
+  const down = computeDownscaledSpriteDimensions(480, 360, 160);
+  assert.equal(down.width, 160);
+  assert.equal(down.height, 120);
+  assert.ok(Math.abs(down.scale - 1 / 3) < 1e-6);
+
+  // Small sprite already <= 160x160 stays unscaled
+  const small = computeDownscaledSpriteDimensions(84, 72, 96);
+  assert.equal(small.width, 84);
+  assert.equal(small.height, 72);
+  assert.equal(small.scale, 1);
+
+  // 120px viewport frustum culling
+  assert.equal(isWithinFrustum120(500, 200, 0, 800, 0, 400), true);
+  assert.equal(isWithinFrustum120(-119, 200, 0, 800, 0, 400), true);
+  assert.equal(isWithinFrustum120(-121, 200, 0, 800, 0, 400), false);
+  assert.equal(isWithinFrustum120(925, 200, 0, 800, 0, 400), false);
+
+  // Zero-allocation in-place insertion sort on pre-allocated queue
+  const queue = [
+    { id: 'c', sortY: 320 },
+    { id: 'a', sortY: 110 },
+    { id: 'b', sortY: 220 },
+    { id: 'ignored_tail', sortY: 5 }
+  ];
+  insertionSortQueueByFootY(queue, 3);
+  assert.deepEqual(
+    queue.slice(0, 3).map((q) => q.id),
+    ['a', 'b', 'c']
+  );
+  assert.equal(queue[3].id, 'ignored_tail', 'Tail beyond active count stays untouched');
+
+  // Static audit of index.html: zero ctx.filter, zero shadowBlur/shadowColor assignments inside match loop
+  const indexHtml = fs.readFileSync(path.resolve(process.cwd(), 'index.html'), 'utf8');
+  assert.equal(/\bctx\.filter\s*=|\bCTX\.filter\s*=/.test(indexHtml), false, 'Zero ctx.filter assignments in match loop');
+  assert.equal(/\bctx\.shadowBlur\s*=|\bCTX\.shadowBlur\s*=/.test(indexHtml), false, 'Zero shadowBlur assignments in match loop');
+  assert.equal(/\bctx\.shadowColor\s*=|\bCTX\.shadowColor\s*=/.test(indexHtml), false, 'Zero shadowColor assignments in match loop');
+  assert.ok(indexHtml.includes('const VIEWPORT_CULL_MARGIN = 120;'), 'index.html enforces 120px frustum cull margin');
+  assert.ok(indexHtml.includes('createPrescaledTileCanvas'), 'index.html pre-scales 1024x1024 tiles to 256x256 once at boot');
+});
+

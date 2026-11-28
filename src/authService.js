@@ -859,9 +859,15 @@ class AuthServiceImpl {
   }
 
   async signInWithEmail(email, password) {
+    this.lastAuthError = null;
+    this.lastAuthErrorCode = null;
     const cleanEmail = String(email || '').trim().toLowerCase();
-    if (!cleanEmail || !cleanEmail.includes('@')) return { ok: false, error: 'Please enter a valid email address.' };
-    if (!password || String(password).length < 6) return { ok: false, error: 'Password must be at least 6 characters.' };
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      return { ok: false, code: 'auth/invalid-email', error: 'Please enter a valid email address.' };
+    }
+    if (!password || String(password).length < 6) {
+      return { ok: false, code: 'auth/weak-password', error: 'Password must be at least 6 characters.' };
+    }
 
     const { auth } = getFirebaseServices();
     if (auth && !this.sandboxAuth) {
@@ -881,6 +887,7 @@ class AuthServiceImpl {
         const code = logAuthError('signInWithEmail', err);
         this.lastAuthErrorCode = code;
         this.lastAuthError = formatFriendlyAuthError(err);
+        this._emit();
         if (!shouldFallbackToSandbox(err)) {
           return { ok: false, code, error: this.lastAuthError };
         }
@@ -902,13 +909,19 @@ class AuthServiceImpl {
   }
 
   async createAccount(championName, email, password, confirmPassword, seedLocal = {}) {
+    this.lastAuthError = null;
+    this.lastAuthErrorCode = null;
     const nameCheck = validateChampionName(championName);
-    if (!nameCheck.valid) return { ok: false, error: nameCheck.error };
+    if (!nameCheck.valid) return { ok: false, code: 'auth/invalid-display-name', error: nameCheck.error };
     const cleanEmail = String(email || '').trim().toLowerCase();
-    if (!cleanEmail || !cleanEmail.includes('@')) return { ok: false, error: 'Please enter a valid email address.' };
-    if (!password || String(password).length < 6) return { ok: false, error: 'Password must be at least 6 characters.' };
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      return { ok: false, code: 'auth/invalid-email', error: 'Please enter a valid email address.' };
+    }
+    if (!password || String(password).length < 6) {
+      return { ok: false, code: 'auth/weak-password', error: 'Password must be at least 6 characters.' };
+    }
     if (confirmPassword !== undefined && password !== confirmPassword) {
-      return { ok: false, error: 'Passwords do not match.' };
+      return { ok: false, code: 'auth/password-mismatch', error: 'Passwords do not match.' };
     }
 
     const { auth } = getFirebaseServices();
@@ -932,6 +945,7 @@ class AuthServiceImpl {
         const code = logAuthError('createAccount', err);
         this.lastAuthErrorCode = code;
         this.lastAuthError = formatFriendlyAuthError(err);
+        this._emit();
         if (!shouldFallbackToSandbox(err)) {
           return { ok: false, code, error: this.lastAuthError };
         }
@@ -952,11 +966,13 @@ class AuthServiceImpl {
   }
 
   async playAsGuest(preferredName = '', seedLocal = {}) {
+    this.lastAuthError = null;
+    this.lastAuthErrorCode = null;
     const trimmed = String(preferredName || '').trim();
     let finalName = '';
     if (trimmed) {
       const check = validateChampionName(trimmed);
-      if (!check.valid) return { ok: false, error: check.error };
+      if (!check.valid) return { ok: false, code: 'auth/invalid-display-name', error: check.error };
       finalName = check.cleaned;
     } else {
       const suffix = Math.floor(1000 + Math.random() * 9000);
@@ -984,6 +1000,7 @@ class AuthServiceImpl {
         const code = logAuthError('playAsGuest', err);
         this.lastAuthErrorCode = code;
         this.lastAuthError = formatFriendlyAuthError(err);
+        this._emit();
         if (!shouldFallbackToSandbox(err)) {
           return { ok: false, code, error: this.lastAuthError };
         }
@@ -999,6 +1016,8 @@ class AuthServiceImpl {
   }
 
   async signInWithGoogle(seedLocal = {}) {
+    this.lastAuthError = null;
+    this.lastAuthErrorCode = null;
     // 1. Native Android APK WebView Hook (when running inside native wrapper)
     const bridge = typeof window !== 'undefined' ? window.ArcaneNativeBridge : null;
     if (bridge && bridge.isNativeApk && typeof bridge.signInWithGoogle === 'function') {
@@ -1012,9 +1031,13 @@ class AuthServiceImpl {
           this._saveSandboxAccount(uid, nativeRes.email || null, null, profile);
           return { ok: true, nativeApk: true, state: this.getState() };
         }
-        return { ok: false, error: nativeRes?.error || 'Google Sign-In cancelled.' };
+        return { ok: false, code: 'auth/popup-closed-by-user', error: nativeRes?.error || 'Google Sign-In cancelled.' };
       } catch (err) {
-        return { ok: false, error: formatFriendlyAuthError(err) };
+        const code = logAuthError('signInWithGoogle(native)', err);
+        this.lastAuthErrorCode = code;
+        this.lastAuthError = formatFriendlyAuthError(err);
+        this._emit();
+        return { ok: false, code, error: this.lastAuthError };
       }
     }
 
@@ -1047,12 +1070,14 @@ class AuthServiceImpl {
             const redirCode = logAuthError('signInWithGoogle(redirect)', redirErr);
             this.lastAuthErrorCode = redirCode;
             this.lastAuthError = formatFriendlyAuthError(redirErr);
+            this._emit();
             return { ok: false, code: redirCode, error: this.lastAuthError };
           }
         }
         if (!shouldFallbackToSandbox(popupErr)) {
           this.lastAuthErrorCode = popupCode;
           this.lastAuthError = formatFriendlyAuthError(popupErr);
+          this._emit();
           return { ok: false, code: popupCode, error: this.lastAuthError };
         }
       }

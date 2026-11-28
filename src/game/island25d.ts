@@ -18,11 +18,25 @@
 export const TILT_Y_SCALE = 0.72;
 export const INV_TILT_Y_SCALE = 1 / TILT_Y_SCALE;
 export const PROP_SHEET_OUTER_MARGIN = 20;
+export const PROP_MAX_CACHE_DIM = 160;
+export const BIOME_TILE_CACHE_SIZE = 256;
+export const FRUSTUM_CULL_MARGIN_PX = 120;
 export const CAMERA_LOOKAHEAD_MAX = 55;
 export const CAMERA_ACTION_ZOOM = 0.92;
 export const PARALLAX_CLOUD_FACTOR = 0.72;
 export const CONTACT_SHADOW_RGBA = 'rgba(0, 0, 0, 0.34)';
 export const WORLD_VISION_CAP = 520;
+
+export const PROP_CACHE_MAX_DIMS: Readonly<Record<PropSpriteKey, number>> = Object.freeze({
+  pillar: 148,
+  wall: 148,
+  obelisk: 160,
+  jump_pad: 120,
+  tree: 160,
+  boulder: 120,
+  chest: 96,
+  barrel: 96
+});
 
 export type IslandBiomeId = 'CITADEL' | 'GROVE' | 'OBSIDIAN' | 'TIDAL';
 
@@ -961,14 +975,102 @@ function makeOffscreenCanvas(w: number, h: number): HTMLCanvasElement {
   return c;
 }
 
+export interface DownscaledSpriteDims {
+  width: number;
+  height: number;
+  scale: number;
+}
+
+/**
+ * Computes aspect-preserving downscaled dimensions capped at `maxDim` (<= 160px)
+ * so sliced 2.5D props are cached once at boot at their actual on-screen size.
+ */
+export function computeDownscaledSpriteDimensions(
+  srcW: number,
+  srcH: number,
+  maxDim = PROP_MAX_CACHE_DIM
+): DownscaledSpriteDims {
+  const safeW = Math.max(1, Math.round(srcW));
+  const safeH = Math.max(1, Math.round(srcH));
+  const cap = Math.max(16, Math.min(PROP_MAX_CACHE_DIM, Math.round(maxDim)));
+  const largest = Math.max(safeW, safeH);
+  if (largest <= cap) {
+    return { width: safeW, height: safeH, scale: 1 };
+  }
+  const scale = cap / largest;
+  return {
+    width: Math.max(1, Math.round(safeW * scale)),
+    height: Math.max(1, Math.round(safeH * scale)),
+    scale
+  };
+}
+
+/**
+ * Viewport frustum culling check using a strict 120px margin around the visible camera bounds.
+ */
+export function isWithinFrustum120(
+  x: number,
+  y: number,
+  viewLeft: number,
+  viewRight: number,
+  viewTop: number,
+  viewBottom: number,
+  radius = 0,
+  margin = FRUSTUM_CULL_MARGIN_PX
+): boolean {
+  const pad = margin + Math.max(0, radius);
+  return x >= viewLeft - pad && x <= viewRight + pad && y >= viewTop - pad && y <= viewBottom + pad;
+}
+
+/**
+ * Zero-allocation in-place insertion sort on a pre-allocated render queue (ascending footY).
+ */
+export function insertionSortQueueByFootY<T extends { sortY: number }>(queue: T[], count: number): void {
+  for (let i = 1; i < count; i++) {
+    const item = queue[i];
+    const curY = item.sortY;
+    let j = i - 1;
+    while (j >= 0 && queue[j].sortY > curY) {
+      queue[j + 1] = queue[j];
+      j--;
+    }
+    queue[j + 1] = item;
+  }
+}
+
+/**
+ * Pre-scales a loaded biome floor tile (e.g. 1024x1024 PNG) ONCE at boot onto a
+ * crisp 256x256 offscreen canvas to eliminate per-frame scaling and save mobile VRAM.
+ */
+export function createPrescaledTileCanvas(
+  img: HTMLImageElement | HTMLCanvasElement,
+  size = BIOME_TILE_CACHE_SIZE
+): HTMLCanvasElement | null {
+  const srcW = (img as HTMLImageElement).naturalWidth || img.width || 0;
+  const srcH = (img as HTMLImageElement).naturalHeight || img.height || 0;
+  if (srcW < 16 || srcH < 16) return null;
+  const targetSize = Math.max(64, Math.min(512, Math.round(size)));
+  const off = makeOffscreenCanvas(targetSize, targetSize);
+  const octx = off.getContext('2d', { alpha: false });
+  if (!octx) return null;
+  octx.imageSmoothingEnabled = true;
+  if ('imageSmoothingQuality' in octx) {
+    octx.imageSmoothingQuality = 'high';
+  }
+  octx.drawImage(img, 0, 0, srcW, srcH, 0, 0, targetSize, targetSize);
+  return off;
+}
+
 /**
  * Slices a loaded 2x2 prop sheet (`props_structures.png` or `props_nature_loot.png`)
- * into 4 cleaned, despilled, auto-trimmed, foot-anchored sprite canvases.
+ * ONCE at boot into 4 cleaned, despilled, auto-trimmed, foot-anchored sprite canvases
+ * downscaled to <= 160x160 to keep mobile GPU texture bandwidth and RAM usage low.
  */
 export function slicePropSheet2x2(
   img: HTMLImageElement | HTMLCanvasElement,
   sheetKey: 'props_structures' | 'props_nature_loot',
-  outerMargin = PROP_SHEET_OUTER_MARGIN
+  outerMargin = PROP_SHEET_OUTER_MARGIN,
+  maxDim = PROP_MAX_CACHE_DIM
 ): Partial<Record<PropSpriteKey, SlicedPropSprite>> {
   const srcW = (img as HTMLImageElement).naturalWidth || img.width || 0;
   const srcH = (img as HTMLImageElement).naturalHeight || img.height || 0;
@@ -1001,9 +1103,15 @@ export function slicePropSheet2x2(
       const trim = computeTrimAndFootAnchor(imgData.data, rect.w, rect.h, 16);
       if (trim.opaqueCount < 24) continue;
 
-      const out = makeOffscreenCanvas(trim.trimW, trim.trimH);
+      const targetCap = Math.min(maxDim, PROP_CACHE_MAX_DIMS[propKey] || PROP_MAX_CACHE_DIM);
+      const dims = computeDownscaledSpriteDimensions(trim.trimW, trim.trimH, targetCap);
+      const out = makeOffscreenCanvas(dims.width, dims.height);
       const octx = out.getContext('2d');
       if (!octx) continue;
+      octx.imageSmoothingEnabled = true;
+      if ('imageSmoothingQuality' in octx) {
+        octx.imageSmoothingQuality = 'high';
+      }
       octx.drawImage(
         work,
         trim.trimX,
@@ -1012,17 +1120,17 @@ export function slicePropSheet2x2(
         trim.trimH,
         0,
         0,
-        trim.trimW,
-        trim.trimH
+        dims.width,
+        dims.height
       );
 
       results[propKey] = {
         key: propKey,
         canvas: out,
-        width: trim.trimW,
-        height: trim.trimH,
-        anchorX: trim.anchorX,
-        anchorY: trim.anchorY,
+        width: dims.width,
+        height: dims.height,
+        anchorX: trim.anchorX * dims.scale,
+        anchorY: trim.anchorY * dims.scale,
         source: 'sheet'
       };
     } catch {
@@ -1525,6 +1633,10 @@ export const Island25DBridge = {
   TILT_Y_SCALE,
   INV_TILT_Y_SCALE,
   PROP_SHEET_OUTER_MARGIN,
+  PROP_MAX_CACHE_DIM,
+  BIOME_TILE_CACHE_SIZE,
+  FRUSTUM_CULL_MARGIN_PX,
+  PROP_CACHE_MAX_DIMS,
   CAMERA_LOOKAHEAD_MAX,
   CAMERA_ACTION_ZOOM,
   PARALLAX_CLOUD_FACTOR,
@@ -1534,6 +1646,9 @@ export const Island25DBridge = {
   PROP_SHEET_QUADRANTS,
   createWorldRng,
   compute2x2QuadrantRects,
+  computeDownscaledSpriteDimensions,
+  isWithinFrustum120,
+  insertionSortQueueByFootY,
   isBrightMagentaPixel,
   isDarkMagentaShadowPixel,
   stripMagentaAndDespillRGBA,
@@ -1549,6 +1664,7 @@ export const Island25DBridge = {
   getBiomeDisplayName,
   sortRenderablesByFootY,
   generateIsland25DWorld,
+  createPrescaledTileCanvas,
   slicePropSheet2x2,
   createProceduralBiomeTiles,
   createProceduralPropSprites

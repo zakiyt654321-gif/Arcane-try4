@@ -36,20 +36,38 @@ function emitBus(type: string, detail: Record<string, unknown>) {
 
 function logFirebaseClientConnection() {
   const services = getFirebaseServices();
+  const configured = isFirebaseConfigured();
   const hostname =
     typeof window !== 'undefined' && window.location ? window.location.hostname : 'unknown';
   const inIframe = typeof window !== 'undefined' ? window.top !== window.self : false;
+  const authInstance = services.auth as { currentUser?: { uid?: string } | null; config?: { authDomain?: string; apiKey?: string } } | null;
+  const initIssues: string[] = [];
+  if (!configured) initIssues.push('auth/configuration-missing');
+  if (configured && !services.auth) initIssues.push('auth/sdk-init-failed');
+  if (configured && !services.liveFirestore) initIssues.push('firestore/sdk-init-failed');
+
   console.info('[CloudSync] Firebase client connection check:', {
-    configured: isFirebaseConfigured(),
+    configured,
     projectId: FIREBASE_CONFIG.projectId,
-    authDomain: FIREBASE_CONFIG.authDomain,
+    authDomain: authInstance?.config?.authDomain || FIREBASE_CONFIG.authDomain,
+    apiKeyPresent: Boolean(authInstance?.config?.apiKey || FIREBASE_CONFIG.apiKey),
     firestoreDatabaseId: FIREBASE_CONFIG.firestoreDatabaseId,
     authReady: Boolean(services.auth),
+    currentUid: authInstance?.currentUser?.uid || null,
     liveFirestore: services.liveFirestore,
     liveRtdb: services.liveRtdb,
     hostname,
     inIframe,
   });
+
+  if (initIssues.length > 0) {
+    console.error('[CloudSync] Firebase Auth initialization error codes detected:', {
+      errorCodes: initIssues,
+      projectId: FIREBASE_CONFIG.projectId,
+      authDomain: FIREBASE_CONFIG.authDomain,
+      hostname,
+    });
+  }
 }
 
 // Forward live state changes from Auth, Social/Squads, and Multiplayer Match over sealed document events
@@ -65,10 +83,11 @@ authService.subscribe((state: Record<string, unknown>) => {
     isAnonymous: Boolean(state.isAnonymous),
     sandboxMode: Boolean(state.sandboxMode),
     lastAuthErrorCode: state.lastAuthErrorCode || null,
+    lastAuthError: state.lastAuthError || null,
   });
   if (summaryKey !== lastLoggedAuthSummary) {
     lastLoggedAuthSummary = summaryKey;
-    console.info('[CloudSync] Auth state changed:', {
+    const payload: Record<string, unknown> = {
       ready: Boolean(state.ready),
       signedIn: Boolean(state.signedIn),
       uid: state.uid || null,
@@ -76,8 +95,14 @@ authService.subscribe((state: Record<string, unknown>) => {
       isAnonymous: Boolean(state.isAnonymous),
       sandboxMode: Boolean(state.sandboxMode),
       statusLabel: state.statusLabel || null,
-      ...(state.lastAuthErrorCode ? { errorCode: state.lastAuthErrorCode, error: state.lastAuthError } : {}),
-    });
+    };
+    if (state.lastAuthErrorCode || state.lastAuthError) {
+      payload.errorCode = state.lastAuthErrorCode || 'auth/unknown';
+      payload.error = state.lastAuthError || null;
+      console.error('[CloudSync] Auth state changed (error detected):', payload);
+    } else {
+      console.info('[CloudSync] Auth state changed:', payload);
+    }
   }
 
   emitBus('ar:cloud:state', state);
@@ -107,6 +132,13 @@ document.addEventListener('ar:cloud:request', async (ev: Event) => {
   if (!detail || !detail.id) return;
   const p = detail.payload || {};
   let result: Record<string, unknown> = { ok: false, error: 'Unknown action' };
+  const isAuthAction = AUTH_ACTIONS.has(detail.action);
+  if (isAuthAction && detail.action !== 'init') {
+    console.info(`[CloudSync] Auth action "${detail.action}" started`, {
+      sandboxMode: authService.getState().sandboxMode,
+      ready: authService.getState().ready,
+    });
+  }
 
   try {
     switch (detail.action) {
@@ -356,11 +388,24 @@ document.addEventListener('ar:cloud:request', async (ev: Event) => {
     result = { ok: false, code, error: message };
   }
 
-  if (AUTH_ACTIONS.has(detail.action) && result && result.ok === false) {
-    console.warn(`[CloudSync] Auth action "${detail.action}" failed:`, {
-      code: result.code || 'unknown',
-      error: result.error || 'Authentication failed',
-    });
+  if (isAuthAction && result) {
+    if (result.ok === false) {
+      console.error(`[CloudSync] Auth action "${detail.action}" failed:`, {
+        code: result.code || 'auth/unknown',
+        error: result.error || 'Authentication failed',
+        hostname: typeof window !== 'undefined' && window.location ? window.location.hostname : 'unknown',
+        authDomain: FIREBASE_CONFIG.authDomain,
+        projectId: FIREBASE_CONFIG.projectId,
+      });
+    } else if (detail.action !== 'init') {
+      const nextState = (result.state as Record<string, unknown> | undefined) || authService.getState();
+      console.info(`[CloudSync] Auth action "${detail.action}" succeeded:`, {
+        signedIn: Boolean(nextState?.signedIn),
+        uid: nextState?.uid || null,
+        authProvider: nextState?.authProvider || null,
+        redirecting: Boolean(result.redirecting),
+      });
+    }
   }
 
   emitBus('ar:cloud:response', { id: detail.id, result });
